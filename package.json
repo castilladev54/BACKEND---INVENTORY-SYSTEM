@@ -19,10 +19,15 @@
     "cross-env": "^10.1.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^8.3.1",
     "framer-motion": "^12.35.1",
+    "helmet": "^8.1.0",
+    "hpp": "^0.2.3",
     "jsonwebtoken": "^9.0.3",
     "mailtrap": "^4.4.0",
-    "mongoose": "^9.2.4"
+    "mongoose": "^9.2.4",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.0.1",

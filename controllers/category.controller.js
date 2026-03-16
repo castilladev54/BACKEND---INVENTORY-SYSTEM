@@ -3,10 +3,7 @@ import { Product } from '../models/Product.js';
 
 export const createCategory = async (req, res) => {
   try {
-    const { name, description } = req.body || {};
-    if (!name) {
-      return res.status(400).json({ success: false, message: "El nombre es obligatorio" });
-    }
+    const { name, description } = req.body;
 
     const categoryExists = await Category.findOne({ name });
     if (categoryExists) {

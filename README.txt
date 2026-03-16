@@ -89,3 +89,19 @@ GET  /:id  -> Detalle de venta efectuada.
 - Costo de Inventario: El Administrador tiene un campo 'av_inventory_cost' que 
   se actualiza dinamicamente con cada compra para analisis financiero.
 ================================================================================
+
+--------------------------------------------------------------------------------
+8. Medidas de seguridad implementadas
+--------------------------------------------------------------------------------
+
+Medida	Paquete	Qué protege
+Headers HTTP seguros	helmet	XSS, clickjacking, MIME sniffing, etc.
+Rate limiting global	express-rate-limit	100 req/15min por IP en todas las rutas
+Rate limiting auth	express-rate-limit	10 req/15min por IP en /api/auth (anti fuerza bruta)
+Sanitización NoSQL	express-mongo-sanitize	Inyecciones como {"$gt":""} en queries MongoDB
+Anti parameter pollution	hpp	Duplicación maliciosa de query params
+Límite de body	express.json({ limit: "10kb" })	Payloads excesivamente grandes (DoS)
+JWT Secret robusto	
+
+.env
+Token JWT ahora tiene un secret de 128 caracteres aleatorios

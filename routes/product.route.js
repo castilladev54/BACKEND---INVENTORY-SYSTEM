@@ -6,14 +6,16 @@ import {
     updateProduct,
     deleteProduct
 } from '../controllers/product.controller.js';
+import { validate } from '../middleware/validate.js';
+import { createProductSchema, updateProductSchema, productIdSchema } from '../validations/product.validation.js';
 
 const router = express.Router();
 
 // Rutas para Productos
-router.post('/', createProduct);
+router.post('/', validate(createProductSchema), createProduct);
 router.get('/', getProducts);
-router.get('/:id', getProductById);
-router.put('/:id', updateProduct);
-router.delete('/:id', deleteProduct);
+router.get('/:id', validate(productIdSchema), getProductById);
+router.put('/:id', validate(updateProductSchema), updateProduct);
+router.delete('/:id', validate(productIdSchema), deleteProduct);
 
 export default router;

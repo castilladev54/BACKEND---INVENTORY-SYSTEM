@@ -8,14 +8,7 @@ export const createPurchase = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { admin_id, supplier, items } = req.body || {};
-
-    if (!admin_id || !supplier || !items || !items.length) {
-      return res.status(400).json({
-        success: false,
-        message: "Admin ID, proveedor y lista de productos son obligatorios"
-      });
-    }
+    const { admin_id, supplier, items } = req.body;
 
     // Verificar si el admin existe
     const admin = await User.findById(admin_id).session(session);

@@ -8,14 +8,7 @@ export const createSale = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { customer_id, items, payment_method } = req.body || {};
-
-        if (!customer_id || !items || !items.length || !payment_method) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Cliente, productos y método de pago son obligatorios" 
-            });
-        }
+        const { customer_id, items, payment_method } = req.body;
 
         // Verificar si el cliente existe
         const user = await User.findById(customer_id).session(session);

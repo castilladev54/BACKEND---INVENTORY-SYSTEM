@@ -97,6 +97,8 @@ Este backend es una API REST construida con **Node.js**, **Express** y **MongoDB
 
 ---
 
+
+
 ## ⚙️ LÓGICA DE NEGOCIO E INTEGRIDAD
 - **Control de Stock Automático**: Las **Compras** incrementan el stock y las **Ventas** lo reducen.
 - **Validación de Inventario**: El sistema bloquea ventas si la cantidad solicitada supera el stock actual.

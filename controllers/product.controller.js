@@ -3,15 +3,7 @@ import { Category } from '../models/Category.js';
 
 export const createProduct = async (req, res) => {
   try {
-    const { name, description, price, stock, category } = req.body || {};
-
-    // Validaciones básicas
-    if (!name || !price || !category) {
-      return res.status(400).json({
-        success: false,
-        message: "Nombre, precio y categoría son obligatorios"
-      });
-    }
+    const { name, description, price, stock, category } = req.body;
 
     // Verificar si la categoría existe
     const categoryExists = await Category.findById(category);
@@ -64,7 +56,7 @@ export const getProductById = async (req, res) => {
 export const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, stock, category } = req.body || {};
+    const { name, description, price, stock, category } = req.body;
 
     // Si se envía una categoría, verificar que exista
     if (category) {
