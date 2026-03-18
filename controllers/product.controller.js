@@ -72,7 +72,7 @@ export const updateProduct = async (req, res) => {
     const product = await Product.findByIdAndUpdate(
       id,
       { name, description, price, stock, category },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).populate('category', 'name');
 
     if (!product) {

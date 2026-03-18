@@ -49,7 +49,7 @@ export const updateCategory = async (req, res) => {
     const category = await Category.findByIdAndUpdate(
       id,
       { name, description, },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     if (!category) {
