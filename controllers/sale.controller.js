@@ -5,26 +5,27 @@ import { Product } from '../models/Product.js';
 import { User } from '../models/User.js';
 
 export const createSale = async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
     try {
         const { customer_id, items, payment_method } = req.body;
 
         // Verificar si el cliente existe
-        const user = await User.findById(customer_id).session(session);
+        const user = await User.findById(customer_id);
         if (!user) {
             return res.status(404).json({ success: false, message: "Cliente no encontrado" });
         }
 
-        // Calcular total y validar stock preliminarmente
+        // Validar stock y calcular total
         let total_amount = 0;
         for (const item of items) {
-            const product = await Product.findById(item.product_id).session(session);
+            const product = await Product.findById(item.product_id);
             if (!product) {
-                throw new Error(`Producto con ID ${item.product_id} no encontrado`);
+                return res.status(404).json({ success: false, message: `Producto con ID ${item.product_id} no encontrado` });
             }
             if (product.stock < item.quantity) {
-                throw new Error(`Stock insuficiente para ${product.name}. Stock actual: ${product.stock}`);
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Stock insuficiente para ${product.name}. Stock actual: ${product.stock}, solicitado: ${item.quantity}` 
+                });
             }
             total_amount += item.quantity * item.unit_price;
         }
@@ -36,22 +37,26 @@ export const createSale = async (req, res) => {
             payment_method,
             status: 'completed'
         });
-        await sale.save({ session });
+        await sale.save();
 
-        // 2. Crear los Detalles de Venta
-        // El middleware pre-save de SaleDetail se encarga de descontar el stock
+        // 2. Crear los Detalles y descontar stock
+        const savedDetails = [];
         for (const item of items) {
+            // Descontar stock directamente
+            await Product.findByIdAndUpdate(
+                item.product_id,
+                { $inc: { stock: -item.quantity } }
+            );
+
             const detail = new SaleDetail({
                 sale_id: sale._id,
                 product_id: item.product_id,
                 quantity: item.quantity,
                 unit_price: item.unit_price
             });
-            await detail.save({ session });
+            await detail.save();
+            savedDetails.push(detail);
         }
-
-        await session.commitTransaction();
-        session.endSession();
 
         res.status(201).json({ 
             success: true, 
@@ -60,8 +65,6 @@ export const createSale = async (req, res) => {
         });
 
     } catch (error) {
-        await session.abortTransaction();
-        session.endSession();
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -86,12 +89,11 @@ export const getSaleById = async (req, res) => {
             return res.status(404).json({ success: false, message: "Venta no encontrada" });
         }
 
-        const details = await SaleDetail.find({ sale_id: id }).populate('product_id', 'name');
+        const items = await SaleDetail.find({ sale_id: id }).populate('product_id', 'name price');
         
         res.status(200).json({ 
             success: true, 
-            sale, 
-            details 
+            sale: { ...sale.toObject(), items }
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

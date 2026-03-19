@@ -24,30 +24,16 @@ const saleDetailSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-// Middleware pre-save: Reglas de validación y reducción de Inventario
-saleDetailSchema.pre('save', async function (next) {
-    const session = this.$session();
-    try {
-        const product = await Product.findById(this.product_id).session(session);
-        if (!product) {
-            throw new Error('Producto no encontrado.');
-        }
+// Middleware pre-save: Solo validación de inventario (el controlador descuenta stock)
+saleDetailSchema.pre('save', async function () {
+    const product = await Product.findById(this.product_id);
+    if (!product) {
+        throw new Error('Producto no encontrado.');
+    }
 
-        // Validación CRÍTICA: Bloquear si no hay inventario
-        if (product.stock - this.quantity < 0) {
-            throw new Error(`Inventario insuficiente. Stock actual de ${product.name}: ${product.stock}. Cantidad solicitada: ${this.quantity}`);
-        }
-
-        // Descontar inventario
-        await Product.findByIdAndUpdate(
-            this.product_id,
-            { $inc: { stock: -this.quantity } },
-            { session }
-        );
-
-        next();
-    } catch (error) {
-        next(error);
+    // Validación CRÍTICA: Bloquear si no hay inventario
+    if (product.stock - this.quantity < 0) {
+        throw new Error(`Inventario insuficiente. Stock actual de ${product.name}: ${product.stock}. Cantidad solicitada: ${this.quantity}`);
     }
 });
 
