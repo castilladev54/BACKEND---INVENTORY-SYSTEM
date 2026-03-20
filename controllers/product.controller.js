@@ -3,7 +3,8 @@ import { Category } from '../models/Category.js';
 
 export const createProduct = async (req, res) => {
   try {
-    const { name, description, price, stock, category } = req.body;
+    // Ignoramos 'stock' del body. El inventario se nutrirá después mediante Compras (Purchases).
+    const { name, description, price, category } = req.body;
 
     // Verificar si la categoría existe y pertenece al usuario
     const categoryExists = await Category.findOne({ _id: category, user: req.userId });
@@ -18,7 +19,7 @@ export const createProduct = async (req, res) => {
       name,
       description,
       price,
-      stock: stock || 0,
+      stock: 0, // Inicia siempre en 0
       category,
       user: req.userId
     });
@@ -57,7 +58,7 @@ export const getProductById = async (req, res) => {
 export const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, stock, category } = req.body;
+    const { name, description, price, category } = req.body; // Se ignora 'stock'
 
     // Si se envía una categoría, verificar que exista y pertenezca al usuario
     if (category) {
@@ -72,7 +73,8 @@ export const updateProduct = async (req, res) => {
 
     const product = await Product.findOneAndUpdate(
       { _id: id, user: req.userId },
-      { name, description, price, stock, category },
+      { name, description, price, category }, // Se quita 'stock' para evitar sobreescritura manual
+
       { returnDocument: 'after', runValidators: true }
     ).populate('category', 'name');
 
