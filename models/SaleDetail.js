@@ -31,9 +31,9 @@ saleDetailSchema.pre('save', async function () {
         throw new Error('Producto no encontrado.');
     }
 
-    // Validación CRÍTICA: Bloquear si no hay inventario
-    if (product.stock - this.quantity < 0) {
-        throw new Error(`Inventario insuficiente. Stock actual de ${product.name}: ${product.stock}. Cantidad solicitada: ${this.quantity}`);
+    // Validación CRÍTICA: Bloquear si el controlador dejó el inventario en negativo
+    if (product.stock < 0) {
+        throw new Error(`Inventario insuficiente. El stock de ${product.name} quedó en negativo.`);
     }
 });
 

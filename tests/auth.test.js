@@ -23,11 +23,13 @@ beforeAll(async () => {
     await mongoose.disconnect();
   }
   await mongoose.connect(mongoUri);
-});
+}, 60000); // Aumentamos el tiempo de espera (timeout) a 60 segundos por si tarda en descargar los binarios de MongoDB
 
 afterAll(async () => {
   await mongoose.disconnect();
-  await mongoServer.stop();
+  if (mongoServer) {
+    await mongoServer.stop(); // Solo lo detenemos si se logró inicializar correctamente
+  }
 });
 
 afterEach(async () => {
