@@ -9,6 +9,7 @@ import categoryRoutes from "./routes/category.route.js";
 import productRoutes from "./routes/product.route.js";
 import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
+import { verifyToken } from "./middleware/verifyToken.js";
 
 import cookieParser from "cookie-parser";
 import path from "path";
@@ -34,11 +35,14 @@ app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());
 
 // ─── Routes ───────────────────────────────────────────────────
+// Auth routes are public (login, signup, etc.)
 app.use("/api/auth", authLimiter, authRoutes);
-app.use("/api/categories", categoryRoutes);
-app.use("/api/products", productRoutes);
-app.use("/api/purchases", purchaseRoutes);
-app.use("/api/sales", saleRoutes);
+
+// Protected routes — require authentication
+app.use("/api/categories", verifyToken, categoryRoutes);
+app.use("/api/products", verifyToken, productRoutes);
+app.use("/api/purchases", verifyToken, purchaseRoutes);
+app.use("/api/sales", verifyToken, saleRoutes);
 
 
 if (process.env.NODE_ENV === "production") {

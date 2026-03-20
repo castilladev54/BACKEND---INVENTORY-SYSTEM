@@ -2,41 +2,38 @@ import mongoose from 'mongoose';
 import { Purchase } from '../models/Purchase.js';
 import { PurchaseDetail } from '../models/PurchaseDetail.js';
 import { Product } from '../models/Product.js';
-import { User } from '../models/User.js';
 
 export const createPurchase = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { admin_id, supplier, items } = req.body;
-
-    // Verificar si el admin existe
-    const admin = await User.findById(admin_id).session(session);
-    if (!admin || admin.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: "El usuario no existe o no tiene permisos de administrador"
-      });
-    }
+    const { supplier, items } = req.body;
 
     // Calcular costo total
     let total_cost = 0;
     for (const item of items) {
+      // Verificar que el producto pertenece al usuario
+      const product = await Product.findOne({ _id: item.product_id, user: req.userId }).session(session);
+      if (!product) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({
+          success: false,
+          message: `Producto con ID ${item.product_id} no encontrado`
+        });
+      }
       total_cost += item.quantity * item.unit_cost;
     }
 
-    // 1. Crear la Compra Principal
+    // 1. Crear la Compra Principal (asociada al usuario autenticado)
     const purchase = new Purchase({
-      admin_id,
+      admin_id: req.userId,
       supplier,
       total_cost
     });
     await purchase.save({ session });
 
     // 2. Crear los Detalles de Compra
-    // Nota: El middleware pre-save de PurchaseDetail se encargará de:
-    // - Incrementar el stock del producto
-    // - Recalcular el av_inventory_cost del Admin
     for (const item of items) {
       const detail = new PurchaseDetail({
         purchase_id: purchase._id,
@@ -65,7 +62,7 @@ export const createPurchase = async (req, res) => {
 
 export const getPurchases = async (req, res) => {
   try {
-    const purchases = await Purchase.find()
+    const purchases = await Purchase.find({ admin_id: req.userId })
       .populate('admin_id', 'name email')
       .sort({ createdAt: -1 });
     res.status(200).json({ success: true, purchases });
@@ -77,7 +74,8 @@ export const getPurchases = async (req, res) => {
 export const getPurchaseById = async (req, res) => {
   try {
     const { id } = req.params;
-    const purchase = await Purchase.findById(id).populate('admin_id', 'name email');
+    const purchase = await Purchase.findOne({ _id: id, admin_id: req.userId })
+      .populate('admin_id', 'name email');
 
     if (!purchase) {
       return res.status(404).json({ success: false, message: "Compra no encontrada" });

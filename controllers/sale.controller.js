@@ -2,22 +2,15 @@ import mongoose from 'mongoose';
 import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
 import { Product } from '../models/Product.js';
-import { User } from '../models/User.js';
 
 export const createSale = async (req, res) => {
     try {
-        const { customer_id, items, payment_method } = req.body;
-
-        // Verificar si el cliente existe
-        const user = await User.findById(customer_id);
-        if (!user) {
-            return res.status(404).json({ success: false, message: "Cliente no encontrado" });
-        }
+        const { items, payment_method } = req.body;
 
         // Validar stock y calcular total
         let total_amount = 0;
         for (const item of items) {
-            const product = await Product.findById(item.product_id);
+            const product = await Product.findOne({ _id: item.product_id, user: req.userId });
             if (!product) {
                 return res.status(404).json({ success: false, message: `Producto con ID ${item.product_id} no encontrado` });
             }
@@ -30,9 +23,9 @@ export const createSale = async (req, res) => {
             total_amount += item.quantity * item.unit_price;
         }
 
-        // 1. Crear la Venta Principal
+        // 1. Crear la Venta Principal (asociada al usuario autenticado)
         const sale = new Sale({
-            customer_id,
+            customer_id: req.userId,
             total_amount,
             payment_method,
             status: 'completed'
@@ -71,7 +64,7 @@ export const createSale = async (req, res) => {
 
 export const getSales = async (req, res) => {
     try {
-        const sales = await Sale.find()
+        const sales = await Sale.find({ customer_id: req.userId })
             .populate('customer_id', 'name email')
             .sort({ createdAt: -1 });
         res.status(200).json({ success: true, sales });
@@ -83,7 +76,8 @@ export const getSales = async (req, res) => {
 export const getSaleById = async (req, res) => {
     try {
         const { id } = req.params;
-        const sale = await Sale.findById(id).populate('customer_id', 'name email');
+        const sale = await Sale.findOne({ _id: id, customer_id: req.userId })
+            .populate('customer_id', 'name email');
         
         if (!sale) {
             return res.status(404).json({ success: false, message: "Venta no encontrada" });
