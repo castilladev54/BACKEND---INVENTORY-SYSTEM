@@ -15,14 +15,18 @@ vi.mock('../mailtrap/emails.js', () => ({
 let mongoServer;
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
+  mongoServer = await MongoMemoryServer.create({
+    instance: {
+      launchTimeout: 60000, // 60s para que mongod arranque
+    },
+  });
   const mongoUri = mongoServer.getUri();
   
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
   await mongoose.connect(mongoUri);
-}, 60000);
+}, 120000);
 
 afterAll(async () => {
   await mongoose.disconnect();

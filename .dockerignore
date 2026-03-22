@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log*
+.env
+.git
+.github
+.gitignore
+.agents
+tests
+README.md
+README.txt
+skills-lock.json
+Dockerfile
+docker-compose.yml
+.dockerignore

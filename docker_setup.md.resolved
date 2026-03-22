@@ -1,0 +1,95 @@
+# 🐳 Docker Setup — Inventory System Backend
+
+## Archivos creados
+
+| Archivo | Propósito |
+|---------|-----------|
+| [Dockerfile](file:///c:/Users/Carlos/Documents/backend1.0/Dockerfile) | Imagen multi-stage con Node 22 Alpine |
+| [.dockerignore](file:///c:/Users/Carlos/Documents/backend1.0/.dockerignore) | Excluye archivos innecesarios del build |
+| [docker-compose.yml](file:///c:/Users/Carlos/Documents/backend1.0/docker-compose.yml) | Levanta API + MongoDB 7 juntos |
+| [publish.yml](file:///c:/Users/Carlos/Documents/backend1.0/.github/workflows/publish.yml) | CI/CD: tests + build + push a GHCR |
+
+---
+
+## Uso local con Docker Compose
+
+### 1. Configurar variables de entorno
+Asegúrate de que tu [.env](file:///c:/Users/Carlos/Documents/backend1.0/.env) tenga estas variables (Docker Compose las lee automáticamente):
+
+```env
+JWT_SECRET=tu_jwt_secret_aqui
+MAILTRAP_TOKEN=tu_token
+MAILTRAP_ENDPOINT=https://send.api.mailtrap.io
+CLIENT_URL=http://localhost:5173
+ADMIN_REGISTRATION_KEY=miEmpresaAdmin2026
+MONGO_USER=admin
+MONGO_PASSWORD=secret
+```
+
+### 2. Levantar todo
+```bash
+docker compose up -d --build
+```
+
+### 3. Verificar que está corriendo
+```bash
+docker compose ps
+docker compose logs api
+```
+
+### 4. Apagar
+```bash
+docker compose down          # mantiene los datos
+docker compose down -v       # borra también el volumen de MongoDB
+```
+
+---
+
+## CI/CD — GitHub Actions
+
+El workflow [publish.yml](file:///c:/Users/Carlos/Documents/backend1.0/.github/workflows/publish.yml) ejecuta dos jobs:
+
+```mermaid
+graph LR
+    A[Push a main / tag v*] --> B[Job: test]
+    B -->|✅ Tests pasan| C[Job: publish]
+    C --> D[Build Docker image]
+    D --> E[Push a ghcr.io]
+```
+
+### Tags automáticos en GHCR
+| Evento | Tag generado |
+|--------|-------------|
+| Push a `main` | `ghcr.io/usuario/repo:main` |
+| Tag `v1.2.3` | `ghcr.io/usuario/repo:1.2.3` y `ghcr.io/usuario/repo:1.2` |
+| Cualquier push | `ghcr.io/usuario/repo:<sha>` |
+
+### Para hacer un release con tag:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+> [!IMPORTANT]
+> No necesitas configurar ningún secret adicional. El workflow usa `GITHUB_TOKEN` que GitHub provee automáticamente.
+
+---
+
+## Arquitectura del Dockerfile
+
+```mermaid
+graph TB
+    subgraph "Stage 1: deps"
+        A[node:22-alpine] --> B[npm ci --omit=dev]
+    end
+    subgraph "Stage 2: production"
+        C[node:22-alpine] --> D[Copy node_modules from deps]
+        D --> E[Copy app source]
+        E --> F[Run as non-root user]
+        F --> G[CMD node server.js]
+    end
+    B --> D
+```
+
+> [!TIP]
+> La imagen final pesa ~150MB gracias a Alpine + multi-stage (solo dependencias de producción).
