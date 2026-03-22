@@ -4,11 +4,10 @@ import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import app from '../server.js';
 import { User } from '../models/User.js';
+import bcryptjs from 'bcryptjs';
 
-// Mocking external email delivery API to avoid sending real emails, as per anti-pattern guide recommendation
+// Mocking external email delivery API
 vi.mock('../mailtrap/emails.js', () => ({
-  sendVerificationEmail: vi.fn(),
-  sendWelcomeEmail: vi.fn(),
   sendPasswordResetEmail: vi.fn(),
   sendResetSuccessEmail: vi.fn(),
 }));
@@ -23,12 +22,12 @@ beforeAll(async () => {
     await mongoose.disconnect();
   }
   await mongoose.connect(mongoUri);
-}, 60000); // Aumentamos el tiempo de espera (timeout) a 60 segundos por si tarda en descargar los binarios de MongoDB
+}, 60000);
 
 afterAll(async () => {
   await mongoose.disconnect();
   if (mongoServer) {
-    await mongoServer.stop(); // Solo lo detenemos si se logró inicializar correctamente
+    await mongoServer.stop();
   }
 });
 
@@ -42,14 +41,36 @@ afterEach(async () => {
 });
 
 describe('Auth Controllers Integration', () => {
-  describe('POST /api/auth/signup', () => {
-    it('should create a new user successfully', async () => {
+
+  describe('POST /api/auth/create-user', () => {
+    let adminCookie;
+
+    beforeEach(async () => {
+      // 1. Inyectar un admin directo a la BD para las pruebas
+      const hashedPassword = await bcryptjs.hash('admin123', 10);
+      await User.create({
+        email: 'admin@test.com',
+        password: hashedPassword,
+        name: 'Admin User',
+        role: 'admin'
+      });
+      
+      // 2. Loguearse como admin para obtener la cookie protegida
+      const loginRes = await request(app).post('/api/auth/login').send({
+        email: 'admin@test.com',
+        password: 'admin123'
+      });
+      adminCookie = loginRes.headers['set-cookie'];
+    });
+
+    it('should allow admin to create a new customer successfully', async () => {
       const response = await request(app)
-        .post('/api/auth/signup')
+        .post('/api/auth/create-user')
+        .set('Cookie', adminCookie)
         .send({
           email: 'test@example.com',
           password: 'password123',
-          name: 'Test User'
+          name: 'Test Customer'
         });
 
       expect(response.status).toBe(201);
@@ -60,40 +81,29 @@ describe('Auth Controllers Integration', () => {
       // verify DB directly
       const userInDb = await User.findOne({ email: 'test@example.com' });
       expect(userInDb).toBeTruthy();
-      expect(userInDb.isVerified).toBe(false);
+      expect(userInDb.subscriptionExpiresAt).toBeDefined();
     });
 
-    it('should prevent duplicate email signup', async () => {
-      // First signup setup
-      await request(app)
-        .post('/api/auth/signup')
-        .send({
-          email: 'duplicate@example.com',
-          password: 'password123',
-          name: 'Test User'
-        });
-        
-      // Second signup attempt
+    it('should reject unauthenticated request without admin token', async () => {
       const response = await request(app)
-        .post('/api/auth/signup')
+        .post('/api/auth/create-user')
+        // No le mandamos la Cookie de Admin
         .send({
-          email: 'duplicate@example.com',
+          email: 'hacker@example.com',
           password: 'password123',
-          name: 'Another User'
+          name: 'Hacker'
         });
 
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
-      expect(response.body.message).toBe('User already exists'); // Correctly rejected
+      expect(response.status).toBe(401); // Unauthorized
     });
   });
 
   describe('POST /api/auth/login', () => {
     beforeEach(async () => {
-      // Create user
-      await request(app).post('/api/auth/signup').send({
+      const hashedPassword = await bcryptjs.hash('password123', 10);
+      await User.create({
         email: 'login@example.com',
-        password: 'password123',
+        password: hashedPassword,
         name: 'Login User'
       });
     });
@@ -108,7 +118,7 @@ describe('Auth Controllers Integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(response.headers['set-cookie']).toBeDefined(); // Cookie should be set for jwt
+      expect(response.headers['set-cookie']).toBeDefined();
     });
 
     it('should reject invalid credentials', async () => {
@@ -119,7 +129,7 @@ describe('Auth Controllers Integration', () => {
           password: 'wrongpassword'
         });
 
-      expect(response.status).toBe(400); // Bad Request status
+      expect(response.status).toBe(400);
       expect(response.body.message).toBe('Invalid credentials');
     });
   });

@@ -8,11 +8,10 @@ import { Category } from '../models/Category.js';
 import { Product } from '../models/Product.js';
 import { Purchase } from '../models/Purchase.js';
 import { PurchaseDetail } from '../models/PurchaseDetail.js';
+import bcryptjs from 'bcryptjs';
 
 // Mockeamos la librería de correos para evitar envíos reales
 vi.mock('../mailtrap/emails.js', () => ({
-  sendVerificationEmail: vi.fn(),
-  sendWelcomeEmail: vi.fn(),
   sendPasswordResetEmail: vi.fn(),
   sendResetSuccessEmail: vi.fn(),
 }));
@@ -59,23 +58,22 @@ describe('Purchase Controllers Integration', () => {
   let productId;
   
   beforeAll(async () => {
-    // 1. Iniciamos usuario único para todo el bloque
+    // 1. Iniciamos usuario único para todo el bloque directamente en DB (pues quitamos signup público)
     const testEmail = `purchaser${Date.now()}${Math.floor(Math.random() * 1000)}@example.com`;
-    const signupRes = await request(app).post('/api/auth/signup').send({
+    const hashedPassword = await bcryptjs.hash('password123', 10);
+    const user = await User.create({
       email: testEmail,
-      password: 'password123',
-      name: 'Purchaser Admin'
+      password: hashedPassword,
+      name: 'Purchaser Admin',
+      role: 'admin'
     });
-    if (!signupRes.body || !signupRes.body.success) throw new Error("Fallo al crear usuario de compras");
+    userId = user._id.toString();
     
     // 2. Iniciamos sesión y guardamos cookie JWT
     const loginRes = await request(app).post('/api/auth/login').send({
       email: testEmail, password: 'password123'
     });
     authCookie = loginRes.headers['set-cookie'];
-
-    const userInDb = await User.findOne({ email: testEmail });
-    userId = userInDb._id.toString();
 
     // 3. Crear Categoría en BD
     const category = new Category({ name: 'Car Parts', user: userId });
@@ -87,6 +85,7 @@ describe('Purchase Controllers Integration', () => {
       name: 'Engine X1',
       price: 1500,
       stock: 0,
+      unit_type: 'kg', // Setteado a kg para soportar decimales en los test
       category: categoryId,
       user: userId
     });
@@ -95,15 +94,15 @@ describe('Purchase Controllers Integration', () => {
   });
 
   describe('POST /api/purchases', () => {
-    it('should create a purchase, automatically INCREMENT product stock, and recalculate average costs', async () => {
+    it('should create a purchase with FRACTIONAL quantities (kg support), automatically INCREMENT product stock, and recalculate average costs', async () => {
       const payload = {
         admin_id: userId,
         supplier: 'Global Supplier Corp',
         items: [
           {
             product_id: productId,
-            quantity: 15,
-            unit_cost: 100 // total cost of this item line = 1500
+            quantity: 15.5, // ¡Probando nuestra función de fracciones / kilos!
+            unit_cost: 100 // total cost of this item line = 1550
           }
         ]
       };
@@ -116,7 +115,7 @@ describe('Purchase Controllers Integration', () => {
       expect(response.status).toBe(201);
       expect(response.body.success).toBe(true);
       expect(response.body.purchase.supplier).toBe('Global Supplier Corp');
-      expect(response.body.purchase.total_cost).toBe(1500);
+      expect(response.body.purchase.total_cost).toBe(1550); // 15.5 * 100
       
       const purchaseId = response.body.purchase._id;
 
@@ -124,11 +123,12 @@ describe('Purchase Controllers Integration', () => {
       const details = await PurchaseDetail.find({ purchase_id: purchaseId });
       expect(details).toHaveLength(1);
       expect(details[0].product_id.toString()).toBe(productId);
+      expect(details[0].quantity).toBe(15.5);
 
       // 2. TRIGGERS MAGICOS DE MONGOOSE PRE('SAVE'):
-      // El pre-save de PurchaseDetail indica que el stock del producto DEBE haber subido de 0 a 15.
+      // El pre-save de PurchaseDetail indica que el stock del producto DEBE haber subido de 0 a 15.5
       const updatedProduct = await Product.findById(productId);
-      expect(updatedProduct.stock).toBe(15);
+      expect(updatedProduct.stock).toBe(15.5);
 
       // El pre-save de PurchaseDetail también debió actualizar el "av_inventory_cost" en User.
       const updatedUser = await User.findById(userId);
@@ -140,7 +140,7 @@ describe('Purchase Controllers Integration', () => {
       const payload = {
         admin_id: userId,
         supplier: 'Bad Supplier',
-        items: [{ product_id: fakeProductId, quantity: 5, unit_cost: 50 }]
+        items: [{ product_id: fakeProductId, quantity: 5.2, unit_cost: 50 }]
       };
 
       const response = await request(app)

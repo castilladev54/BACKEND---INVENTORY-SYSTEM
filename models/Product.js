@@ -21,6 +21,11 @@ const productSchema = new mongoose.Schema({
     ref: 'Category',
     required: true
   },
+  unit_type: {
+    type: String,
+    enum: ['unidad', 'kg', 'litro', 'metro'],
+    default: 'unidad'
+  },
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

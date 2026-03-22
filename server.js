@@ -10,6 +10,7 @@ import productRoutes from "./routes/product.route.js";
 import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
 import { verifyToken } from "./middleware/verifyToken.js";
+import { checkSubscription } from "./middleware/checkSubscription.js";
 
 import cookieParser from "cookie-parser";
 import path from "path";
@@ -39,10 +40,10 @@ app.use(cookieParser());
 app.use("/api/auth", authLimiter, authRoutes);
 
 // Protected routes — require authentication
-app.use("/api/categories", verifyToken, categoryRoutes);
-app.use("/api/products", verifyToken, productRoutes);
-app.use("/api/purchases", verifyToken, purchaseRoutes);
-app.use("/api/sales", verifyToken, saleRoutes);
+app.use("/api/categories", verifyToken, checkSubscription, categoryRoutes);
+app.use("/api/products", verifyToken, checkSubscription, productRoutes);
+app.use("/api/purchases", verifyToken, checkSubscription, purchaseRoutes);
+app.use("/api/sales", verifyToken, checkSubscription, saleRoutes);
 
 
 if (process.env.NODE_ENV === "production") {

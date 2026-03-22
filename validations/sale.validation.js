@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const saleItemSchema = z.object({
   product_id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Product ID format"),
-  quantity: z.number().int().min(1, "Quantity must be at least 1"),
+  quantity: z.number().min(0.01, "Quantity must be at least 0.01"),
   unit_price: z.number().min(0, "Unit price must be a positive number")
 });
 

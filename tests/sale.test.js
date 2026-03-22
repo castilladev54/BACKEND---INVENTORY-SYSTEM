@@ -8,6 +8,7 @@ import { Category } from '../models/Category.js';
 import { Product } from '../models/Product.js';
 import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
+import bcryptjs from 'bcryptjs';
 
 // Mockeamos el envío de emails para evitar enviar correos reales
 vi.mock('../mailtrap/emails.js', () => ({
@@ -51,35 +52,34 @@ describe('Sale Controllers Integration', () => {
   let categoryId;
   let productId;
   
-  // Usamos beforeEach porque la limpieza del afterEach borra el producto base,
-  // pero el Usuario base se inicializa 1 sola vez en la primera prueba.
+  beforeAll(async () => {
+    const testEmail = `seller${Date.now()}${Math.floor(Math.random()*1000)}@example.com`;
+    const hashedPassword = await bcryptjs.hash('password123', 10);
+    const user = await User.create({
+      email: testEmail,
+      password: hashedPassword,
+      name: 'Sales Admin',
+      role: 'admin'
+    });
+    userId = user._id.toString();
+    
+    const loginRes = await request(app).post('/api/auth/login').send({
+      email: testEmail, password: 'password123'
+    });
+    authCookie = loginRes.headers['set-cookie'];
+
+    const category = new Category({ name: 'Tech Store', user: userId });
+    await category.save();
+    categoryId = category._id.toString();
+  });
+
   beforeEach(async () => {
-    // Si no tenemos userId, significa que es la primera ejecución y debemos crearlo (rate-limit safe)
-    if (!userId) {
-      const testEmail = `seller${Date.now()}${Math.floor(Math.random()*1000)}@example.com`;
-      const signupRes = await request(app).post('/api/auth/signup').send({
-        email: testEmail, password: 'password123', name: 'Sales Admin'
-      });
-      if (!signupRes.body.success) throw new Error("Fallo signup seller");
-      
-      const loginRes = await request(app).post('/api/auth/login').send({
-        email: testEmail, password: 'password123'
-      });
-      authCookie = loginRes.headers['set-cookie'];
-
-      const userInDb = await User.findOne({ email: testEmail });
-      userId = userInDb._id.toString();
-
-      const category = new Category({ name: 'Tech Store', user: userId });
-      await category.save();
-      categoryId = category._id.toString();
-    }
-
     // El producto se recrea limpio en cada prueba con un stock Fijo de 20
     const product = new Product({
-      name: 'Laptop XPS',
+      name: 'Queso Mozzarella',
       price: 1000,
-      stock: 20,
+      stock: 20, // Simulamos 20kg
+      unit_type: 'kg',
       category: categoryId,
       user: userId
     });
@@ -88,16 +88,16 @@ describe('Sale Controllers Integration', () => {
   });
 
   describe('POST /api/sales', () => {
-    it('should create a sale and automatically DECREMENT product stock', async () => {
-      // Importante: El Zod Validator de Ventas exige obligatoriamente incluir 'customer_id' en el body.
+    it('should create a sale with FRACTIONAL quantities (kg support) and automatically DECREMENT product stock', async () => {
+      // Zod Validator exige obligatoriamente incluir 'customer_id' en el body.
       const payload = {
         customer_id: userId,
         payment_method: 'Credit Card',
         items: [
           {
             product_id: productId,
-            quantity: 5,
-            unit_price: 1500 // total_amount del comprobante debería autocalcularse en 7500
+            quantity: 5.5, // 5 kilos y medio
+            unit_price: 1500 // total_amount del comprobante debería autocalcularse en 8250 (1500 * 5.5)
           }
         ]
       };
@@ -109,7 +109,7 @@ describe('Sale Controllers Integration', () => {
 
       expect(response.status).toBe(201);
       expect(response.body.success).toBe(true);
-      expect(response.body.sale.total_amount).toBe(7500); // 1500 * 5 = 7500
+      expect(response.body.sale.total_amount).toBe(8250); // 1500 * 5.5 = 8250
       expect(response.body.sale.payment_method).toBe('Credit Card');
       expect(response.body.sale.status).toBe('completed');
       
@@ -119,11 +119,12 @@ describe('Sale Controllers Integration', () => {
       const details = await SaleDetail.find({ sale_id: saleId });
       expect(details).toHaveLength(1);
       expect(details[0].product_id.toString()).toBe(productId);
+      expect(details[0].quantity).toBe(5.5);
 
       // 2. STOCK DECREMENTADO AUTOMÁTICAMENTE: 
-      // Teníamos 20 de inventario, acabamos de vender 5 -> Quedan 15.
+      // Teníamos 20 de inventario, acabamos de vender 5.5 -> Quedan 14.5
       const updatedProduct = await Product.findById(productId);
-      expect(updatedProduct.stock).toBe(15);
+      expect(updatedProduct.stock).toBe(14.5);
     });
 
     it('should return 400 validation error if missing required Zod fields (e.g., customer_id)', async () => {
@@ -144,7 +145,7 @@ describe('Sale Controllers Integration', () => {
       const payload = {
         customer_id: userId,
         payment_method: 'Debit',
-        items: [{ product_id: productId, quantity: 50, unit_price: 1000 }] // stock original es 20. Trato de vender 50.
+        items: [{ product_id: productId, quantity: 50.2, unit_price: 1000 }] // stock original es 20. Trato de vender 50.2
       };
 
       const response = await request(app)
@@ -153,7 +154,7 @@ describe('Sale Controllers Integration', () => {
         .send(payload);
 
       expect(response.status).toBe(400); 
-      expect(response.body.message).toContain('Stock insuficiente para Laptop XPS');
+      expect(response.body.message).toContain('Stock insuficiente para Queso Mozzarella');
       
       // El stock debió quedarse en 20 intacto porque el sistema rebotó la venta exitosamente en el controlador
       const updatedProduct = await Product.findById(productId);
@@ -201,7 +202,7 @@ describe('Sale Controllers Integration', () => {
       const createRes = await request(app).post('/api/sales').set('Cookie', authCookie).send({
              customer_id: userId,
              payment_method: 'PayPal',
-             items: [{ product_id: productId, quantity: 3, unit_price: 100 }]
+             items: [{ product_id: productId, quantity: 3.5, unit_price: 100 }]
       });
       const saleId = createRes.body.sale._id;
 
@@ -215,7 +216,7 @@ describe('Sale Controllers Integration', () => {
       // 3. El Backend inyecta el listado de Detalle en un array en la raíz del json usando `items:`
       expect(response.body.sale.items).toBeDefined();
       expect(response.body.sale.items).toHaveLength(1); 
-      expect(response.body.sale.items[0].product_id.name).toBe('Laptop XPS'); // populado automáticamente
+      expect(response.body.sale.items[0].product_id.name).toBe('Queso Mozzarella'); // populado automáticamente
     });
 
     it('should return 404 for grabbing a non-existent sale ID', async () => {

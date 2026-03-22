@@ -20,10 +20,6 @@ const userSchema = new mongoose.Schema({
     required: true,
     default: 'customer'
   },
-  isVerified: {
-    type: Boolean,
-    default: false
-  },
   av_inventory_cost: {
     type: Number,
     default: 0
@@ -34,8 +30,9 @@ const userSchema = new mongoose.Schema({
   },
   resetPasswordToken: String,
   resetPasswordExpiresAt: Date,
-  verificationToken: String,
-  verificationTokenExpiresAt: Date
+  subscriptionExpiresAt: {
+    type: Date
+  }
 }, { timestamps: true });
 
 export const User = mongoose.model('User', userSchema);

@@ -6,6 +6,7 @@ import app from '../server.js';
 import { User } from '../models/User.js';
 import { Category } from '../models/Category.js';
 import { Product } from '../models/Product.js';
+import bcryptjs from 'bcryptjs';
 
 // Mocking external email delivery API to avoid sending real emails
 vi.mock('../mailtrap/emails.js', () => ({
@@ -49,16 +50,15 @@ describe('Category Controllers Integration', () => {
   beforeAll(async () => {
     const testEmail = `categorytest${Date.now()}${Math.floor(Math.random() * 1000)}@example.com`;
 
-    // 1. Creamos un usuario de prueba (Se ejecuta UNA SOLA VEZ para todas las pruebas de esta suite)
-    const signupRes = await request(app).post('/api/auth/signup').send({
+    // 1. Creamos un usuario de prueba directamente en BD (Se ejecuta UNA SOLA VEZ para todas las pruebas)
+    const hashedPassword = await bcryptjs.hash('password123', 10);
+    const user = await User.create({
       email: testEmail,
-      password: 'password123',
-      name: 'Category Tester'
+      password: hashedPassword,
+      name: 'Category Tester',
+      role: 'admin'
     });
-
-    if (!signupRes.body || !signupRes.body.success) {
-       throw new Error(`Fallo al crear usuario en beforeAll: ${JSON.stringify(signupRes.body || 'Sin respuesta body')}`);
-    }
+    userId = user._id.toString();
     
     // 2. Iniciamos sesión para obtener el token/cookie
     const loginRes = await request(app).post('/api/auth/login').send({
@@ -66,13 +66,6 @@ describe('Category Controllers Integration', () => {
       password: 'password123'
     });
     authCookie = loginRes.headers['set-cookie'];
-
-    // 3. Obtenemos su ObjectID directamente
-    const userInDb = await User.findOne({ email: testEmail });
-    if (!userInDb) {
-       throw new Error(`Usuario no encontrado en la base de datos tras signup: ${testEmail}`);
-    }
-    userId = userInDb._id.toString();
   });
 
   describe('POST /api/categories', () => {
@@ -211,6 +204,7 @@ describe('Category Controllers Integration', () => {
       const product = new Product({
         name: 'Associated Product',
         price: 15,
+        unit_type: 'unidad',
         category: catId,
         user: userId
       });

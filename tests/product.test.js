@@ -6,6 +6,7 @@ import app from '../server.js';
 import { User } from '../models/User.js';
 import { Category } from '../models/Category.js';
 import { Product } from '../models/Product.js';
+import bcryptjs from 'bcryptjs';
 
 // Mocking external email delivery API to avoid sending real emails
 vi.mock('../mailtrap/emails.js', () => ({
@@ -49,16 +50,15 @@ describe('Product Controllers Integration', () => {
   beforeAll(async () => {
     testEmail = `user${Date.now()}${Math.floor(Math.random() * 1000)}@example.com`;
 
-    // 1. Creamos un usuario de prueba
-    const signupRes = await request(app).post('/api/auth/signup').send({
+    // 1. Creamos un usuario de prueba directamente en DB (pues signup ya no existe)
+    const hashedPassword = await bcryptjs.hash('password123', 10);
+    const user = await User.create({
       email: testEmail,
-      password: 'password123',
-      name: 'Test User'
+      password: hashedPassword,
+      name: 'Test Admin',
+      role: 'admin'
     });
-
-    if (!signupRes.body || !signupRes.body.success) {
-       throw new Error(`Fallo al crear usuario en beforeEach: ${JSON.stringify(signupRes.body || 'Sin respuesta body')}`);
-    }
+    userId = user._id.toString();
     
     // 2. Iniciamos sesión para obtener el token/cookie
     const loginRes = await request(app).post('/api/auth/login').send({
@@ -68,12 +68,6 @@ describe('Product Controllers Integration', () => {
     authCookie = loginRes.headers['set-cookie'];
 
     // 3. Creamos una categoría directamente en la BD asociandolo a nuestro usuario
-    const userInDb = await User.findOne({ email: testEmail });
-    if (!userInDb) {
-       throw new Error(`Usuario no encontrado en la base de datos tras signup: ${testEmail}`);
-    }
-    userId = userInDb._id.toString();
-
     const category = new Category({
       name: 'Test Category DB',
       description: 'Created from DB',
@@ -84,7 +78,7 @@ describe('Product Controllers Integration', () => {
   });
 
   describe('POST /api/products', () => {
-    it('should create a new product successfully', async () => {
+    it('should create a new product successfully with unit_type (kg support)', async () => {
       const response = await request(app)
         .post('/api/products')
         .set('Cookie', authCookie)
@@ -92,7 +86,8 @@ describe('Product Controllers Integration', () => {
           name: 'Test Product',
           description: 'A great test product',
           price: 150,
-          category: categoryId
+          category: categoryId,
+          unit_type: 'kg'
         });
 
       expect(response.status).toBe(201);
@@ -102,6 +97,7 @@ describe('Product Controllers Integration', () => {
       expect(response.body.product.stock).toBe(0); // El stock inicial debe ser siempre 0
       expect(response.body.product.category).toBe(categoryId);
       expect(response.body.product.user).toBe(userId);
+      expect(response.body.product.unit_type).toBe('kg'); // Verificar que guarde kg
     });
 
     it('should return 400 if category does not exist for this user', async () => {
@@ -205,7 +201,7 @@ describe('Product Controllers Integration', () => {
   });
 
   describe('PUT /api/products/:id', () => {
-    it('should update a product successfully (ignoring stock)', async () => {
+    it('should update a product successfully (ignoring stock, updating unit_type)', async () => {
       // Creamos
       const createRes = await request(app)
         .post('/api/products')
@@ -213,7 +209,8 @@ describe('Product Controllers Integration', () => {
         .send({
           name: 'Old Name',
           price: 10,
-          category: categoryId
+          category: categoryId,
+          unit_type: 'unidad'
         });
       const productId = createRes.body.product._id;
 
@@ -224,6 +221,7 @@ describe('Product Controllers Integration', () => {
         .send({
           name: 'New Name',
           price: 20,
+          unit_type: 'litro',
           stock: 99 // Este valor debería ignorarse según la lógica del controlador
         });
 
@@ -231,6 +229,7 @@ describe('Product Controllers Integration', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.product.name).toBe('New Name');
       expect(response.body.product.price).toBe(20);
+      expect(response.body.product.unit_type).toBe('litro');
       expect(response.body.product.stock).toBe(0); // El stock se mantiene en 0 a pesar de haber mandado '99'
     });
 
