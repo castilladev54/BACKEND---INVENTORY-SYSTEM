@@ -1,4 +1,10 @@
 import { User } from "../models/User.js";
+import { Category } from "../models/Category.js";
+import { Product } from "../models/Product.js";
+import { Purchase } from "../models/Purchase.js";
+import { PurchaseDetail } from "../models/PurchaseDetail.js";
+import { Sale } from "../models/Sale.js";
+import { SaleDetail } from "../models/SaleDetail.js";
 import crypto from "crypto";
 import bcryptjs from "bcryptjs";
 import { generateTokenAndSetCookie } from "../utils/generateTokenAndSetCookie.js";
@@ -157,5 +163,47 @@ export const checkAuth = async (req, res) => {
   } catch (error) {
     console.log("Error in checkAuth ", error);
     res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const purgeUserAndData = async (req, res) => {
+  try {
+    const adminUser = await User.findById(req.userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ success: false, message: "Sólo administradores pueden purgar cuentas." });
+    }
+
+    const { targetUserId } = req.params;
+    
+    // Evitar auto-eliminación por seguridad
+    if (adminUser._id.toString() === targetUserId) {
+       return res.status(400).json({ success: false, message: "No puedes eliminar tu propia cuenta." });
+    }
+
+    // 1. Eliminar datos transaccionales en Cascada
+    const userPurchases = await Purchase.find({ admin_id: targetUserId });
+    const purchaseIds = userPurchases.map(p => p._id);
+    await PurchaseDetail.deleteMany({ purchase_id: { $in: purchaseIds } });
+    await Purchase.deleteMany({ admin_id: targetUserId });
+
+    const userSales = await Sale.find({ customer_id: targetUserId });
+    const saleIds = userSales.map(s => s._id);
+    await SaleDetail.deleteMany({ sale_id: { $in: saleIds } });
+    await Sale.deleteMany({ customer_id: targetUserId });
+
+    // 2. Eliminar Catálogo del usuario
+    await Product.deleteMany({ user: targetUserId });
+    await Category.deleteMany({ user: targetUserId });
+
+    // 3. Eliminar Usuario
+    const deletedUser = await User.findByIdAndDelete(targetUserId);
+    if (!deletedUser) {
+      return res.status(404).json({ success: false, message: "Usuario no encontrado." });
+    }
+
+    res.status(200).json({ success: true, message: "El usuario y todos sus registros han sido purgados exitosamente de la base de datos." });
+  } catch (error) {
+    console.log("Error in purgeUserAndData ", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
