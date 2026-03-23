@@ -1,49 +1,44 @@
-# ─── Stage 1: Install dependencies ─────────────────────────────
-FROM node:22-alpine AS deps
+# ─── Stage 1: Build ──────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy only dependency manifests first for better layer caching
-COPY package.json package-lock.json ./
+# Copiar dependencias primero (mejor cache de capas)
+COPY package*.json ./
 
-# Install production dependencies only (no devDependencies)
+# Instalar dependencias de producción
 RUN npm ci --omit=dev
 
-# ─── Stage 2: Production image ─────────────────────────────────
-FROM node:22-alpine AS production
+# ─── Stage 2: Production ──────────────────────────────────────────────────────
+FROM node:20-alpine AS production
 
-# Security: run as non-root user
+# Crear usuario no-root por seguridad
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-# Copy production dependencies from deps stage
-COPY --from=deps /app/node_modules ./node_modules
+# Copiar dependencias del stage anterior
+COPY --from=builder /app/node_modules ./node_modules
 
-# Copy application source code
-COPY package.json ./
-COPY server.js ./
-COPY controllers ./controllers
-COPY lib ./lib
-COPY mailtrap ./mailtrap
-COPY middleware ./middleware
-COPY models ./models
-COPY routes ./routes
-COPY utils ./utils
-COPY validations ./validations
+# Copiar el código fuente con permisos adecuados
+COPY --chown=appuser:appgroup . .
 
-# Set production environment
+# Eliminar archivos innecesarios para producción
+RUN rm -rf tests/ .github/ .agents/ *.md *.txt scripts/
+
+# Variables de entorno por defecto
 ENV NODE_ENV=production
+ENV PORT=3000
 
-# Expose the application port
-EXPOSE 5000
-
-# Switch to non-root user
+# Usar usuario no-root
 USER appuser
 
-# Health check to verify the container is running
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:5000/api/auth || exit 1
+# Exponer el puerto
+EXPOSE 3000
 
-# Start the application
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
+
+# Comando de inicio
 CMD ["node", "server.js"]
