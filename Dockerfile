@@ -6,7 +6,7 @@ WORKDIR /app
 # Copiar dependencias primero (mejor cache de capas)
 COPY package*.json ./
 
-# Instalar TODAS las dependencias (incluyendo dev para build si se necesitara)
+# Instalar dependencias de producción
 RUN npm ci --omit=dev
 
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
@@ -20,21 +20,21 @@ WORKDIR /app
 # Copiar dependencias del stage anterior
 COPY --from=builder /app/node_modules ./node_modules
 
-# Copiar el código fuente
+# Copiar el código fuente con permisos adecuados
 COPY --chown=appuser:appgroup . .
 
-# Eliminar archivos innecesarios en producción
-RUN rm -rf tests/ .github/ .agents/ *.md
+# Eliminar archivos innecesarios para producción
+RUN rm -rf tests/ .github/ .agents/ *.md *.txt scripts/
+
+# Variables de entorno por defecto
+ENV NODE_ENV=production
+ENV PORT=3000
 
 # Usar usuario no-root
 USER appuser
 
 # Exponer el puerto
 EXPOSE 3000
-
-# Variables de entorno por defecto
-ENV NODE_ENV=production
-ENV PORT=3000
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \

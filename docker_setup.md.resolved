@@ -1,0 +1,70 @@
+# 🐳 Docker Setup — Inventory System Backend
+
+## Archivos creados
+
+| Archivo | Propósito |
+|---------|-----------|
+| [Dockerfile](./Dockerfile) | Imagen multi-stage optimizada para producción |
+| [.dockerignore](./.dockerignore) | Excluye archivos innecesarios del build |
+| [docker-compose.yml](./docker-compose.yml) | Orquestación de API + MongoDB |
+| [ci.yml](./.github/workflows/ci.yml) | Pipeline de CI/CD: tests + build + push |
+
+---
+
+## Uso local con Docker Compose
+
+### 1. Configurar variables de entorno
+Asegúrate de que tu [.env](./.env) tenga estas variables (Docker Compose las leerá para configurar los contenedores):
+
+```env
+JWT_SECRET=tu_jwt_secret_aqui
+MAILTRAP_TOKEN=tu_token_mailtrap
+MAILTRAP_ENDPOINT=https://send.api.mailtrap.io
+CLIENT_URL=http://localhost:5173
+ADMIN_REGISTRATION_KEY=miEmpresaAdmin2026
+MONGO_USER=admin
+MONGO_PASSWORD=secret
+```
+
+### 2. Levantar todo
+```bash
+docker compose up -d --build
+```
+
+### 3. Verificar salud
+```bash
+docker compose ps
+curl http://localhost:3000/api/health
+```
+
+---
+
+## CI/CD — GitHub Actions
+
+El workflow [ci.yml](./.github/workflows/ci.yml) automatiza la calidad del código:
+
+```mermaid
+graph LR
+    A[Push / PR] --> B[Job: test]
+    B -->|✅ Tests pasan| C[Job: docker-build]
+    C -->|Solo en main| D[Push a Docker Hub]
+```
+
+### Configuración de Secretos en GitHub
+Para que el push funcione, configura estos **Secrets** en tu repositorio:
+- `DOCKER_USERNAME`: Tu usuario de Docker Hub.
+- `DOCKER_TOKEN`: Un Access Token generado en Docker Hub.
+- `JWT_SECRET`: Para los tests en el CI.
+- `ADMIN_REGISTRATION_KEY`: Para validar el setup.
+
+---
+
+## Arquitectura de la Imagen (Dockerfile)
+
+La imagen utiliza un **multi-stage build** para minimizar el tamaño y maximizar la seguridad:
+
+1. **Stage 1 (builder)**: Instala dependencias de producción usando `npm ci --omit=dev`.
+2. **Stage 2 (production)**: Copia solo lo necesario, usa un usuario no-root (`appuser`) y expone el puerto 3000.
+
+> [!TIP]
+> La imagen final es ligera (~150MB) y segura.

@@ -35,6 +35,11 @@ app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());
 
+// Health Check Endpoint
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // ─── Routes ───────────────────────────────────────────────────
 // Auth routes are public (login, signup, etc.)
 app.use("/api/auth", authLimiter, authRoutes);
