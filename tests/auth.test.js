@@ -140,4 +140,48 @@ describe('Auth Controllers Integration', () => {
       expect(response.body.message).toBe('Invalid credentials');
     });
   });
+
+  describe('POST /api/auth/logout', () => {
+    it('should clear the token cookie', async () => {
+      const response = await request(app).post('/api/auth/logout');
+      
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.headers['set-cookie']).toBeDefined();
+    });
+  });
+
+  describe('GET /api/auth/check-auth', () => {
+    let userCookie;
+    
+    beforeEach(async () => {
+      const hashedPassword = await bcryptjs.hash('password123', 10);
+      await User.create({
+        email: 'check@example.com',
+        password: hashedPassword,
+        name: 'Check User'
+      });
+      const loginRes = await request(app).post('/api/auth/login').send({
+        email: 'check@example.com',
+        password: 'password123'
+      });
+      userCookie = loginRes.headers['set-cookie'];
+    });
+
+    it('should return user info when authenticated', async () => {
+      const response = await request(app)
+        .get('/api/auth/check-auth')
+        .set('Cookie', userCookie);
+      
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.user.email).toBe('check@example.com');
+    });
+
+    it('should return 401 if unauthenticated (no token)', async () => {
+      const response = await request(app).get('/api/auth/check-auth');
+      expect(response.status).toBe(401);
+      expect(response.body.message).toBe('Unauthorized - no token provided');
+    });
+  });
 });
