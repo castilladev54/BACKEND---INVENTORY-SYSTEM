@@ -40,6 +40,11 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
+// Root Route
+app.get("/", (req, res) => {
+  res.send("<h1>🚀 API del Sistema de Inventario Funcionando</h1><p>Versión 1.0.0</p>");
+});
+
 // ─── Routes ───────────────────────────────────────────────────
 // Auth routes are public (login, signup, etc.)
 app.use("/api/auth", authLimiter, authRoutes);
