@@ -24,8 +24,25 @@ Este backend es una API REST robusta construida con **Node.js**, **Express** y *
    - `JWT_SECRET=`
    - `CLIENT_URL=`
    - `NODE_ENV=`
-3. **Ejecutar en desarrollo**: `npm run dev`
-4. **Ejecutar pruebas**: `npm run test` (Nota: El test de `purchases` exige MongoMemoryReplSet y puede tardar en Windows si se corre en paralelo).
+27. **Ejecutar en desarrollo**: `npm run dev`
+28. **Ejecutar pruebas**: `npm run test` (Nota: El test de `purchases` exige MongoMemoryReplSet y puede tardar en Windows si se corre en paralelo).
+
+---
+
+## 🐳 DOCKER (OPCIONAL)
+
+El sistema incluye soporte para **Docker** mediante un multi-stage build optimizado para producción.
+
+1. **Construir la imagen**:
+   ```bash
+   docker build -t inventory-backend .
+   ```
+2. **Ejecutar el contenedor**:
+   ```bash
+   docker run -p 3000:3000 --env-file .env inventory-backend
+   ```
+
+*La imagen corre como usuario no-root e incluye un Healthcheck interno.*
 
 ---
 
