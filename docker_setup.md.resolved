@@ -4,21 +4,21 @@
 
 | Archivo | Propósito |
 |---------|-----------|
-| [Dockerfile](file:///c:/Users/Carlos/Documents/backend1.0/Dockerfile) | Imagen multi-stage con Node 22 Alpine |
-| [.dockerignore](file:///c:/Users/Carlos/Documents/backend1.0/.dockerignore) | Excluye archivos innecesarios del build |
-| [docker-compose.yml](file:///c:/Users/Carlos/Documents/backend1.0/docker-compose.yml) | Levanta API + MongoDB 7 juntos |
-| [publish.yml](file:///c:/Users/Carlos/Documents/backend1.0/.github/workflows/publish.yml) | CI/CD: tests + build + push a GHCR |
+| [Dockerfile](./Dockerfile) | Imagen multi-stage optimizada para producción |
+| [.dockerignore](./.dockerignore) | Excluye archivos innecesarios del build |
+| [docker-compose.yml](./docker-compose.yml) | Orquestación de API + MongoDB |
+| [ci.yml](./.github/workflows/ci.yml) | Pipeline de CI/CD: tests + build + push |
 
 ---
 
 ## Uso local con Docker Compose
 
 ### 1. Configurar variables de entorno
-Asegúrate de que tu [.env](file:///c:/Users/Carlos/Documents/backend1.0/.env) tenga estas variables (Docker Compose las lee automáticamente):
+Asegúrate de que tu [.env](./.env) tenga estas variables (Docker Compose las leerá para configurar los contenedores):
 
 ```env
 JWT_SECRET=tu_jwt_secret_aqui
-MAILTRAP_TOKEN=tu_token
+MAILTRAP_TOKEN=tu_token_mailtrap
 MAILTRAP_ENDPOINT=https://send.api.mailtrap.io
 CLIENT_URL=http://localhost:5173
 ADMIN_REGISTRATION_KEY=miEmpresaAdmin2026
@@ -31,65 +31,40 @@ MONGO_PASSWORD=secret
 docker compose up -d --build
 ```
 
-### 3. Verificar que está corriendo
+### 3. Verificar salud
 ```bash
 docker compose ps
-docker compose logs api
-```
-
-### 4. Apagar
-```bash
-docker compose down          # mantiene los datos
-docker compose down -v       # borra también el volumen de MongoDB
+curl http://localhost:3000/api/health
 ```
 
 ---
 
 ## CI/CD — GitHub Actions
 
-El workflow [publish.yml](file:///c:/Users/Carlos/Documents/backend1.0/.github/workflows/publish.yml) ejecuta dos jobs:
+El workflow [ci.yml](./.github/workflows/ci.yml) automatiza la calidad del código:
 
 ```mermaid
 graph LR
-    A[Push a main / tag v*] --> B[Job: test]
-    B -->|✅ Tests pasan| C[Job: publish]
-    C --> D[Build Docker image]
-    D --> E[Push a ghcr.io]
+    A[Push / PR] --> B[Job: test]
+    B -->|✅ Tests pasan| C[Job: docker-build]
+    C -->|Solo en main| D[Push a Docker Hub]
 ```
 
-### Tags automáticos en GHCR
-| Evento | Tag generado |
-|--------|-------------|
-| Push a `main` | `ghcr.io/usuario/repo:main` |
-| Tag `v1.2.3` | `ghcr.io/usuario/repo:1.2.3` y `ghcr.io/usuario/repo:1.2` |
-| Cualquier push | `ghcr.io/usuario/repo:<sha>` |
-
-### Para hacer un release con tag:
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-> [!IMPORTANT]
-> No necesitas configurar ningún secret adicional. El workflow usa `GITHUB_TOKEN` que GitHub provee automáticamente.
+### Configuración de Secretos en GitHub
+Para que el push funcione, configura estos **Secrets** en tu repositorio:
+- `DOCKER_USERNAME`: Tu usuario de Docker Hub.
+- `DOCKER_TOKEN`: Un Access Token generado en Docker Hub.
+- `JWT_SECRET`: Para los tests en el CI.
+- `ADMIN_REGISTRATION_KEY`: Para validar el setup.
 
 ---
 
-## Arquitectura del Dockerfile
+## Arquitectura de la Imagen (Dockerfile)
 
-```mermaid
-graph TB
-    subgraph "Stage 1: deps"
-        A[node:22-alpine] --> B[npm ci --omit=dev]
-    end
-    subgraph "Stage 2: production"
-        C[node:22-alpine] --> D[Copy node_modules from deps]
-        D --> E[Copy app source]
-        E --> F[Run as non-root user]
-        F --> G[CMD node server.js]
-    end
-    B --> D
-```
+La imagen utiliza un **multi-stage build** para minimizar el tamaño y maximizar la seguridad:
+
+1. **Stage 1 (builder)**: Instala dependencias de producción usando `npm ci --omit=dev`.
+2. **Stage 2 (production)**: Copia solo lo necesario, usa un usuario no-root (`appuser`) y expone el puerto 3000.
 
 > [!TIP]
-> La imagen final pesa ~150MB gracias a Alpine + multi-stage (solo dependencias de producción).
+> La imagen final es ligera (~150MB) y segura.

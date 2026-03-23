@@ -22,45 +22,42 @@ jobs:
         run: npm test
         env:
           NODE_ENV: test
-          JWT_SECRET: dummy_secret
+          JWT_SECRET: test_secret_key_ci
 
-  # 🐳 JOB: Docker (ONLY on main branch and if secrets are present)
+  # 🐳 JOB: Docker (Always build for validation)
   docker:
     name: 🐳 Docker Build & Push
     runs-on: ubuntu-latest
     needs: test
-    # Solo intentamos subir si estamos en main y tenemos las credenciales
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Check for Docker Secrets
         id: check_secrets
         run: |
-          if [ -z "${{ secrets.DOCKER_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_TOKEN }}" ]; then
-            echo "::warning title=Missing Secrets::Docker credentials are missing. Skipping push."
-            echo "available=false" >> $GITHUB_OUTPUT
+          if [ -n "${{ secrets.DOCKER_USERNAME }}" ] && [ -n "${{ secrets.DOCKER_TOKEN }}" ]; then
+            echo "can_push=true" >> $GITHUB_OUTPUT
           else
-            echo "available=true" >> $GITHUB_OUTPUT
+            echo "can_push=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Set up Docker Buildx
-        if: steps.check_secrets.outputs.available == 'true'
-        uses: docker/setup-buildx-action@v3
-
       - name: Log in to Docker Hub
-        if: steps.check_secrets.outputs.available == 'true'
+        # Solo lo hacemos si estamos en main, en un push, y tenemos secretos
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.check_secrets.outputs.can_push == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
-      - name: Build and push
-        if: steps.check_secrets.outputs.available == 'true'
+      - name: Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/backend-inventory:latest
+          # Solo pushear si estamos en main, en un push, y tenemos secretos
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.check_secrets.outputs.can_push == 'true' }}
+          tags: ${{ secrets.DOCKER_USERNAME || 'local' }}/backend-inventory:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

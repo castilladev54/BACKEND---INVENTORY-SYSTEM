@@ -15,6 +15,9 @@ vi.mock('../mailtrap/emails.js', () => ({
 let mongoServer;
 
 beforeAll(async () => {
+  // Asegurar que exista una clave secreta para los tests
+  process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_secret_key';
+  
   mongoServer = await MongoMemoryServer.create({
     instance: {
       launchTimeout: 60000, // 60s para que mongod arranque
