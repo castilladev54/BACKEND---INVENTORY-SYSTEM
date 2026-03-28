@@ -30,7 +30,7 @@ app.use(hpp());
 app.use(globalLimiter);
 
 // ─── Body Parsing ─────────────────────────────────────────────
-app.use(cors({ origin: process.env.CLIENT_URL || "https://dasboard-react-tailwindcss.vercel.app", credentials: true }));
+app.use(cors({ origin: [process.env.CLIENT_URL, "https://dasboard-react-tailwindcss.vercel.app", "http://localhost:5173"].filter(Boolean), credentials: true }));
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());

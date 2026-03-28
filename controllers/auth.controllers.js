@@ -9,6 +9,7 @@ import crypto from "crypto";
 import bcryptjs from "bcryptjs";
 import { generateTokenAndSetCookie } from "../utils/generateTokenAndSetCookie.js";
 import { sendPasswordResetEmail, sendResetSuccessEmail } from "../mailtrap/emails.js";
+import { invalidateCache } from "../lib/redis.js";
 
 export const createUser = async (req, res) => {
   const { email, password, name, role } = req.body;
@@ -200,6 +201,14 @@ export const purgeUserAndData = async (req, res) => {
     if (!deletedUser) {
       return res.status(404).json({ success: false, message: "Usuario no encontrado." });
     }
+
+    // 4. Invalidar todo el caché del usuario purgado
+    await invalidateCache(
+      `categories:${targetUserId}`,
+      `products:${targetUserId}`,
+      `purchases:${targetUserId}`,
+      `sales:${targetUserId}`
+    );
 
     res.status(200).json({ success: true, message: "El usuario y todos sus registros han sido purgados exitosamente de la base de datos." });
   } catch (error) {

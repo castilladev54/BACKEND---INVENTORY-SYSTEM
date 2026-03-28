@@ -1,5 +1,6 @@
 import { Category } from '../models/Category.js';
 import { Product } from '../models/Product.js';
+import { getOrSetCache, invalidateCache } from '../lib/redis.js';
 
 export const createCategory = async (req, res) => {
   try {
@@ -13,6 +14,9 @@ export const createCategory = async (req, res) => {
     const category = new Category({ name, description, user: req.userId });
     await category.save();
 
+    // Invalidar caché de listado de categorías del usuario
+    await invalidateCache(`categories:${req.userId}`);
+
     res.status(201).json({ success: true, category });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -21,8 +25,12 @@ export const createCategory = async (req, res) => {
 
 export const getCategories = async (req, res) => {
   try {
-    const categories = await Category.find({ user: req.userId });
-    res.status(200).json({ success: true, categories });
+    const cacheKey = `categories:${req.userId}`;
+    const { data: categories, fromCache } = await getOrSetCache(cacheKey, () =>
+      Category.find({ user: req.userId }).lean()
+    );
+
+    res.status(200).json({ success: true, categories, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -31,11 +39,15 @@ export const getCategories = async (req, res) => {
 export const getCategoryById = async (req, res) => {
   try {
     const { id } = req.params;
-    const category = await Category.findOne({ _id: id, user: req.userId });
+    const cacheKey = `category:${id}:${req.userId}`;
+    const { data: category, fromCache } = await getOrSetCache(cacheKey, () =>
+      Category.findOne({ _id: id, user: req.userId }).lean()
+    );
+
     if (!category) {
       return res.status(404).json({ success: false, message: "Categoría no encontrada" });
     }
-    res.status(200).json({ success: true, category });
+    res.status(200).json({ success: true, category, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -55,6 +67,9 @@ export const updateCategory = async (req, res) => {
     if (!category) {
       return res.status(404).json({ success: false, message: "Categoría no encontrada" });
     }
+
+    // Invalidar caché del listado y de esta categoría individual
+    await invalidateCache(`categories:${req.userId}`, `category:${id}:${req.userId}`);
 
     res.status(200).json({ success: true, category });
   } catch (error) {
@@ -82,6 +97,9 @@ export const deleteCategory = async (req, res) => {
         }
 
         await Category.findByIdAndDelete(id);
+
+        // Invalidar caché del listado y de esta categoría individual
+        await invalidateCache(`categories:${req.userId}`, `category:${id}:${req.userId}`);
 
         res.status(200).json({ success: true, message: "Categoría eliminada correctamente" });
     } catch (error) {

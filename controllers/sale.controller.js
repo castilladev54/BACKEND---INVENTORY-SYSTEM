@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
 import { Product } from '../models/Product.js';
+import { getOrSetCache, invalidateCache } from '../lib/redis.js';
 
 export const createSale = async (req, res) => {
     try {
@@ -51,6 +52,9 @@ export const createSale = async (req, res) => {
             savedDetails.push(detail);
         }
 
+        // Invalidar caché de ventas y productos (el stock cambia con las ventas)
+        await invalidateCache(`sales:${req.userId}`, `products:${req.userId}`);
+
         res.status(201).json({ 
             success: true, 
             message: "Venta registrada exitosamente", 
@@ -64,10 +68,15 @@ export const createSale = async (req, res) => {
 
 export const getSales = async (req, res) => {
     try {
-        const sales = await Sale.find({ customer_id: req.userId })
-            .populate('customer_id', 'name email')
-            .sort({ createdAt: -1 });
-        res.status(200).json({ success: true, sales });
+        const cacheKey = `sales:${req.userId}`;
+        const { data: sales, fromCache } = await getOrSetCache(cacheKey, () =>
+            Sale.find({ customer_id: req.userId })
+                .populate('customer_id', 'name email')
+                .sort({ createdAt: -1 })
+                .lean()
+        );
+
+        res.status(200).json({ success: true, sales, fromCache });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -76,18 +85,30 @@ export const getSales = async (req, res) => {
 export const getSaleById = async (req, res) => {
     try {
         const { id } = req.params;
-        const sale = await Sale.findOne({ _id: id, customer_id: req.userId })
-            .populate('customer_id', 'name email');
-        
-        if (!sale) {
+        const cacheKey = `sale:${id}:${req.userId}`;
+
+        const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
+            const sale = await Sale.findOne({ _id: id, customer_id: req.userId })
+                .populate('customer_id', 'name email')
+                .lean();
+            
+            if (!sale) return null;
+
+            const items = await SaleDetail.find({ sale_id: id })
+                .populate('product_id', 'name price')
+                .lean();
+            
+            return { ...sale, items };
+        });
+
+        if (!data) {
             return res.status(404).json({ success: false, message: "Venta no encontrada" });
         }
 
-        const items = await SaleDetail.find({ sale_id: id }).populate('product_id', 'name price');
-        
         res.status(200).json({ 
             success: true, 
-            sale: { ...sale.toObject(), items }
+            sale: data,
+            fromCache
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
