@@ -16,6 +16,13 @@ vi.mock('../mailtrap/emails.js', () => ({
   sendResetSuccessEmail: vi.fn(),
 }));
 
+// Mock Redis: evita llamadas HTTP reales a Upstash en CI/CD
+vi.mock('../lib/redis.js', () => ({
+  redis: {},
+  getOrSetCache: vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
+  invalidateCache: vi.fn(async () => {}),
+}));
+
 let mongoReplSet;
 
 beforeAll(async () => {
@@ -29,7 +36,10 @@ beforeAll(async () => {
     await mongoose.disconnect();
   }
   await mongoose.connect(mongoUri);
-}, 60000); 
+  // Pequeño delay para que el Replica Set termine de elegir el nodo PRIMARY
+  // antes de intentar hacer transacciones, evitando el intermitente error 500.
+  await new Promise((r) => setTimeout(r, 1500));
+}, 120000); 
 
 afterAll(async () => {
   await mongoose.disconnect();
