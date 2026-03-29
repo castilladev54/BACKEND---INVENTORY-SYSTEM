@@ -5,6 +5,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import app from '../server.js';
 import { User } from '../models/User.js';
 import { Product } from '../models/Product.js';
+import { Category } from '../models/Category.js';
 import { InventoryAdjustment } from '../models/InventoryAdjustment.js';
 import bcryptjs from 'bcryptjs';
 
@@ -50,6 +51,7 @@ afterEach(async () => {
 describe('Inventory Adjustment Feature', () => {
   let authCookie;
   let userId;
+  let categoryId;
 
   beforeAll(async () => {
     const testEmail = `adjusttest${Date.now()}@example.com`;
@@ -61,6 +63,9 @@ describe('Inventory Adjustment Feature', () => {
       role: 'admin'
     });
     userId = user._id.toString();
+
+    const cat = await Category.create({ name: 'Test Category', user: userId });
+    categoryId = cat._id.toString();
 
     const loginRes = await request(app).post('/api/auth/login').send({
       email: testEmail,
@@ -77,6 +82,7 @@ describe('Inventory Adjustment Feature', () => {
         price: 15,
         unit_type: 'unidad',
         stock: 0,
+        category: categoryId,
         user: userId
       });
 
@@ -106,6 +112,7 @@ describe('Inventory Adjustment Feature', () => {
         price: 100,
         unit_type: 'unidad',
         stock: 12,
+        category: categoryId,
         user: userId
       });
 
@@ -128,6 +135,7 @@ describe('Inventory Adjustment Feature', () => {
         price: 5,
         unit_type: 'unidad',
         stock: 10,
+        category: categoryId,
         user: userId
       });
 
@@ -148,6 +156,7 @@ describe('Inventory Adjustment Feature', () => {
         price: 5,
         unit_type: 'unidad',
         stock: 10,
+        category: categoryId,
         user: userId
       });
 
@@ -176,6 +185,7 @@ describe('Inventory Adjustment Feature', () => {
         price: 50,
         unit_type: 'unidad',
         stock: 0,
+        category: categoryId,
         user: userId
       });
 
