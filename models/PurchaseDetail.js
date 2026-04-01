@@ -74,4 +74,6 @@ purchaseDetailSchema.pre('save', async function () {
   );
 });
 
+purchaseDetailSchema.index({ purchase_id: 1 });
+
 export const PurchaseDetail = mongoose.model('PurchaseDetail', purchaseDetailSchema);

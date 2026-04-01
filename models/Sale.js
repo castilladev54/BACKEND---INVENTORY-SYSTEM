@@ -21,4 +21,6 @@ const saleSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+saleSchema.index({ customer_id: 1, createdAt: -1 });
+
 export const Sale = mongoose.model('Sale', saleSchema);

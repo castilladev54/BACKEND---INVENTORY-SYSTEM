@@ -1,6 +1,6 @@
 import { Product } from '../models/Product.js';
 import { Category } from '../models/Category.js';
-import { getOrSetCache, invalidateCache } from '../lib/redis.js';
+import { invalidateCache } from '../lib/redis.js';
 
 export const createProduct = async (req, res) => {
   try {
@@ -51,12 +51,8 @@ export const createProduct = async (req, res) => {
 
 export const getProducts = async (req, res) => {
   try {
-    const cacheKey = `products:${req.userId}`;
-    const { data: products, fromCache } = await getOrSetCache(cacheKey, () =>
-      Product.find({ user: req.userId }).populate('category', 'name').lean()
-    );
-
-    res.status(200).json({ success: true, products, fromCache });
+    const products = await Product.find({ user: req.userId }).populate('category', 'name').lean();
+    res.status(200).json({ success: true, products });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -65,16 +61,13 @@ export const getProducts = async (req, res) => {
 export const getProductById = async (req, res) => {
   try {
     const { id } = req.params;
-    const cacheKey = `product:${id}:${req.userId}`;
-    const { data: product, fromCache } = await getOrSetCache(cacheKey, () =>
-      Product.findOne({ _id: id, user: req.userId }).populate('category', 'name').lean()
-    );
+    const product = await Product.findOne({ _id: id, user: req.userId }).populate('category', 'name').lean();
 
     if (!product) {
       return res.status(404).json({ success: false, message: "Producto no encontrado" });
     }
 
-    res.status(200).json({ success: true, product, fromCache });
+    res.status(200).json({ success: true, product });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -84,13 +77,10 @@ export const getProductById = async (req, res) => {
 export const getProductByBarcode = async (req, res) => {
   try {
     const { code } = req.params;
-    const cacheKey = `barcode:${code}:${req.userId}`;
 
-    const { data: product, fromCache } = await getOrSetCache(cacheKey, () =>
-      Product.findOne({ barcode: code, user: req.userId })
+    const product = await Product.findOne({ barcode: code, user: req.userId })
         .populate('category', 'name')
-        .lean()
-    );
+        .lean();
 
     if (!product) {
       return res.status(404).json({
@@ -99,7 +89,7 @@ export const getProductByBarcode = async (req, res) => {
       });
     }
 
-    res.status(200).json({ success: true, product, fromCache });
+    res.status(200).json({ success: true, product });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

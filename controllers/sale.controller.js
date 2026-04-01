@@ -52,8 +52,13 @@ export const createSale = async (req, res) => {
             savedDetails.push(detail);
         }
 
-        // Invalidar caché de ventas y productos (el stock cambia con las ventas)
-        await invalidateCache(`sales:${req.userId}`, `products:${req.userId}`);
+        // Invalidar caché de ventas y productos (el listado y el detalle de cada producto vendido)
+        const keysToInvalidate = [`sales:${req.userId}`, `products:${req.userId}`];
+        for (const item of items) {
+            keysToInvalidate.push(`product:${item.product_id}:${req.userId}`);
+            // NOTA: Si registrásemos el barcode en los items de la venta podríamos invalidarlo también
+        }
+        await invalidateCache(...keysToInvalidate);
 
         res.status(201).json({ 
             success: true, 

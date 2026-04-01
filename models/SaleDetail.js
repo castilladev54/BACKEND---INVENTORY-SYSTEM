@@ -37,4 +37,6 @@ saleDetailSchema.pre('save', async function () {
     }
 });
 
+saleDetailSchema.index({ sale_id: 1 });
+
 export const SaleDetail = mongoose.model('SaleDetail', saleDetailSchema);

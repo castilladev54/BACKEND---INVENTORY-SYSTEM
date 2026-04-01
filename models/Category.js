@@ -17,5 +17,6 @@ const categorySchema = new mongoose.Schema({
 
 // Nombre único por usuario (no global)
 categorySchema.index({ name: 1, user: 1 }, { unique: true });
+categorySchema.index({ user: 1 });
 
 export const Category = mongoose.model('Category', categorySchema);

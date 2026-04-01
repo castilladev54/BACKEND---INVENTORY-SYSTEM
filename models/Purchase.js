@@ -20,4 +20,6 @@ const purchaseSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+purchaseSchema.index({ admin_id: 1, createdAt: -1 });
+
 export const Purchase = mongoose.model('Purchase', purchaseSchema);
