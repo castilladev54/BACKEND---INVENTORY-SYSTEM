@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-export const validate = (schema) => (req, res, next) => {
+export const validate = (schema) => async (req, res, next) => {
   try {
-    schema.parse({
+    await schema.parseAsync({
       body: req.body,
       query: req.query,
       params: req.params,

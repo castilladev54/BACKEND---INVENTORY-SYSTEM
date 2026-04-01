@@ -1,9 +1,9 @@
 import rateLimit from 'express-rate-limit';
 
-/** Rate limiter global — 100 peticiones por ventana de 15 minutos por IP */
+/** Rate limiter global — 1000 peticiones por ventana de 15 minutos por IP */
 export const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 1000,
   skip: () => process.env.NODE_ENV === 'test',
   standardHeaders: true,
   legacyHeaders: false,

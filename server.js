@@ -50,12 +50,17 @@ app.get("/", (req, res) => {
 // Auth routes are public (login, signup, etc.)
 app.use("/api/auth", authLimiter, authRoutes);
 
+import { errorHandler } from "./middleware/errorHandler.js";
+
 // Protected routes — require authentication
 app.use("/api/categories", verifyToken, checkSubscription, categoryRoutes);
 app.use("/api/products", verifyToken, checkSubscription, productRoutes);
 app.use("/api/purchases", verifyToken, checkSubscription, purchaseRoutes);
 app.use("/api/sales", verifyToken, checkSubscription, saleRoutes);
 app.use("/api/adjustments", verifyToken, checkSubscription, adjustmentRoutes);
+
+// Manejador central de errores (siempre al final de las rutas)
+app.use(errorHandler);
 
 
 if (process.env.NODE_ENV === "production") {
