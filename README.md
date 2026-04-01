@@ -121,6 +121,21 @@ El sistema incluye soporte para **Docker** mediante un multi-stage build optimiz
 
 ---
 
+## ⚡ ARQUITECTURA Y ALTO RENDIMIENTO (v2.0+)
+
+El backend cuenta con una infraestructura optimizada nivel Enterprise:
+1. **Arquitectura Controller-Service:** La lógica compleja y transaccional (Ventas, Compras, Ajustes) reside de forma aislada en la capa `/services`, dejando los controladores puros, escalables y orientados a la gestión web.
+2. **Caché Distribuido (Upstash Redis):**
+   - **`cacheMiddleware`:** Interceptor dinámico que sirve respuestas desde RAM y cachea nuevos resultados de forma asíncrona ("Fire-and-Forget") sin bloquear el hilo principal.
+   - **Invalidación Granular e Inteligente:** Las operaciones de escritura limpian específicamente el caché de listas afectadas y de *cada ítem* involucrado, evitando des-sincronizaciones en las vistas de detalle del front-end.
+3. **Manejo Central de Errores:** Aprovechando Express 5.x, el middleware global `errorHandler.js` captura promesas huérfanas, fallos de Zod y violaciones nativas de Mongoose (Duplicate Keys, CastErrors), transformándolas en respuestas HTTP predecibles.
+4. **Validaciones No Bloqueantes:** Usando `z.parseAsync()`, la validación de payloads masivos es enviada al fondo del Event Loop, previniendo micro-congelamientos del servidor.
+5. **Bases de Datos Velozy y Eficiente:**
+   - Índices compuestos meticulosamente configurados (ej. `{ customer_id: 1, createdAt: -1 }`) para acelerar listados cronológicos.
+   - Todo el motor de lectura opera con `.lean()` de Mongoose, retornando POJOs estructurados reduciendo drásticamente el uso de memoria RAM e inflado de objetos.
+
+---
+
 ## ⚙️ REGLAS DE NEGOCIO, INTEGRIDAD Y SEGURIDAD
 
 1. **Gestión de Suscripciones Lock:** 
@@ -132,11 +147,12 @@ El sistema incluye soporte para **Docker** mediante un multi-stage build optimiz
 3. **Control de Inventario Transaccional Seguro:**
    - La entrada (Compras) aumenta el inventario y autocalcula el *Costo Promedio del Inventario* (`av_inventory_cost`).
    - La salida (Ventas) decrementa el inventario validando estrictamente que exista el stock solicitado.
-   - Todo se ejecuta bajo **Transacciones Nativas de MongoDB (ACID)**. Si un producto falla a medio registrar, toda la compra/venta hace Rollback.
+   - Todo se ejecuta bajo **Transacciones Nativas de MongoDB (ACID)**. Si un producto falla a medio registrar, toda la compra/venta hace Rollback total, erradicando los "fantasmas de stock".
 4. **Restricción de Eliminación Relacional:**
    - Una Categoría no puede ser borrada si tiene "Hijos" (Productos) asociados a ella.
 5. **Mitigación de Vulnerabilidades:** 
-   - Todas las entradas tipo body, query y params son parseadas fuertemente usando `Zod`.
+   - Rate Limiter dinámico configurado a 1000/15min de forma global para no asfixiar aplicaciones SPA, manteniendo candados fuertes (10/15min) en endpoints de Auth.
+   - Todas las entradas tipo body, query y params son parseadas asíncronamente fuertemente usando `Zod`.
    - Limpiado y sanitización contra inyecciones NoSQL usando `express-mongo-sanitize`.
    - Prevención de contaminación de parámetros HTTP con `hpp`.
 
