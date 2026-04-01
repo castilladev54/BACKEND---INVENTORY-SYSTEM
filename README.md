@@ -155,4 +155,3 @@ El backend cuenta con una infraestructura optimizada nivel Enterprise:
    - Todas las entradas tipo body, query y params son parseadas asíncronamente fuertemente usando `Zod`.
    - Limpiado y sanitización contra inyecciones NoSQL usando `express-mongo-sanitize`.
    - Prevención de contaminación de parámetros HTTP con `hpp`.
-
