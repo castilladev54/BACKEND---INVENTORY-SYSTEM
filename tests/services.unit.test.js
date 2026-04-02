@@ -94,7 +94,10 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-// Helper: crea un producto fresco con stock configurable
+// Helper: crea un producto fresco con stock configurable.
+// Siempre incluye un barcode único para evitar E11000 en el índice sparse
+// cuando dos productos del mismo usuario se crean dentro del mismo test.
+let _productCounter = 0;
 const createProduct = (stock = 20, extra = {}) =>
   Product.create({
     name: 'Producto Test',
@@ -103,6 +106,7 @@ const createProduct = (stock = 20, extra = {}) =>
     unit_type: 'unidad',
     category: categoryId,
     user: userId,
+    barcode: `TEST-${Date.now()}-${++_productCounter}`, // único por llamada
     ...extra,
   });
 
