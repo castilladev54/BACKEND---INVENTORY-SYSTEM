@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server'; // ← MIGRADO: ReplSet para soportar transacciones ACID
 import app from '../server.js';
 import { User } from '../models/User.js';
 import { Category } from '../models/Category.js';
@@ -18,29 +18,39 @@ vi.mock('../mailtrap/emails.js', () => ({
   sendResetSuccessEmail: vi.fn(),
 }));
 
-// Mock Redis: evita llamadas HTTP reales a Upstash en CI/CD
+// Mock Redis COMPLETO: cubre tanto lib/redis.js (getOrSetCache/invalidateCache)
+// como el cache.middleware.js que llama redis.get() y redis.set() directamente.
 vi.mock('../lib/redis.js', () => ({
-  redis: {},
+  redis: {
+    get: vi.fn(async () => null),   // Simula siempre MISS de caché → pasa al controlador
+    set: vi.fn(async () => 'OK'),    // Simula escritura exitosa en Redis
+    del: vi.fn(async () => 1),
+  },
   getOrSetCache: vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
   invalidateCache: vi.fn(async () => {}),
 }));
 
-let mongoServer;
+let mongoReplSet; // ← MIGRADO: de MongoMemoryServer a MongoMemoryReplSet
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  const mongoUri = mongoServer.getUri();
+  // CRÍTICO: sale.service.js usa Transacciones MongoDB (session.startTransaction()).
+  // Un MongoMemoryServer estándar (standalone) no las soporta. 
+  // Necesitamos un ReplicaSet in-memory aunque sea de 1 nodo.
+  mongoReplSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  const mongoUri = mongoReplSet.getUri();
   
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
   await mongoose.connect(mongoUri);
-}, 60000);
+  // Delay para que el ReplicaSet elija el nodo PRIMARY antes de intentar transacciones
+  await new Promise((r) => setTimeout(r, 1500));
+}, 120000); // ← Aumentado a 120s como purchase y adjustment
 
 afterAll(async () => {
   await mongoose.disconnect();
-  if (mongoServer) {
-    await mongoServer.stop();
+  if (mongoReplSet) {
+    await mongoReplSet.stop();
   }
 });
 

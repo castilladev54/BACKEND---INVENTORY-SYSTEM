@@ -13,9 +13,13 @@ vi.mock('../mailtrap/emails.js', () => ({
   sendResetSuccessEmail: vi.fn(),
 }));
 
-// Mock Redis: evita llamadas HTTP reales a Upstash en CI/CD
+// Mock Redis COMPLETO: cubre tanto lib/redis.js como cache.middleware.js
 vi.mock('../lib/redis.js', () => ({
-  redis: {},
+  redis: {
+    get: vi.fn(async () => null),   // MISS de caché → pasa al controlador
+    set: vi.fn(async () => 'OK'),
+    del: vi.fn(async () => 1),
+  },
   getOrSetCache: vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
   invalidateCache: vi.fn(async () => {}),
 }));

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server'; // ← MIGRADO: ReplSet para transacciones ACID
 import app from '../server.js';
 import { User } from '../models/User.js';
 import { Category } from '../models/Category.js';
@@ -15,32 +15,35 @@ vi.mock('../mailtrap/emails.js', () => ({
   sendResetSuccessEmail: vi.fn(),
 }));
 
-// Mock Redis: evita llamadas HTTP reales a Upstash en CI/CD
+// Mock Redis COMPLETO: cubre tanto lib/redis.js como cache.middleware.js
 vi.mock('../lib/redis.js', () => ({
-  redis: {},
+  redis: {
+    get: vi.fn(async () => null),   // MISS de caché → pasa al controlador
+    set: vi.fn(async () => 'OK'),
+    del: vi.fn(async () => 1),
+  },
   getOrSetCache: vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
   invalidateCache: vi.fn(async () => {}),
 }));
 
-let mongoServer;
+let mongoReplSet;
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  const mongoUri = mongoServer.getUri();
+  mongoReplSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  const mongoUri = mongoReplSet.getUri();
   if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
   await mongoose.connect(mongoUri);
-}, 60000);
+  await new Promise((r) => setTimeout(r, 1500));
+}, 120000);
 
 afterAll(async () => {
   await mongoose.disconnect();
-  if (mongoServer) await mongoServer.stop();
+  if (mongoReplSet) await mongoReplSet.stop();
 });
 
 afterEach(async () => {
   await Sale.deleteMany({});
   await SaleDetail.deleteMany({});
-  // Eliminar la colección completa para que el índice sparse se recree
-  // limpio en la siguiente prueba (evita E11000 por barcode:null)
   await mongoose.connection.collection('products').drop().catch(() => {});
   vi.clearAllMocks();
 });
