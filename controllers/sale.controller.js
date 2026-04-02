@@ -21,8 +21,10 @@ export const createSale = async (req, res) => {
         });
 
     } catch (error) {
-        // Enviar 400 si el error lo detono una aserción de negocio (ej. falta stock).
-        const status = error.message.includes("Stock") || error.message.includes("encontrado") ? 400 : 500;
+        // Mapeo explícito por tipo de error de negocio:
+        let status = 500;
+        if (error.message.includes('Stock insuficiente')) status = 400;
+        else if (error.message.includes('no encontrado'))  status = 404;
         res.status(status).json({ success: false, message: error.message });
     }
 };

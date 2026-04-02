@@ -87,7 +87,10 @@ afterEach(async () => {
   await Purchase.deleteMany({});
   await PurchaseDetail.deleteMany({});
   await InventoryAdjustment.deleteMany({});
-  await Product.deleteMany({});
+  // IMPORTANTE: drop en lugar de deleteMany para que el índice sparse
+  // de barcode se recree limpio. Con deleteMany, documentos con barcode:null
+  // dejan rastro en el índice único y causan E11000 en el siguiente test.
+  await mongoose.connection.collection('products').drop().catch(() => {});
   vi.clearAllMocks();
 });
 
