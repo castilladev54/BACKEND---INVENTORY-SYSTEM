@@ -23,8 +23,25 @@ export const updateProductSchema = z.object({
     price: z.number().min(0, "Price must be a positive number").optional(),
     stock: z.number().min(0, "Stock must be a non-negative number").optional(),
     unit_type: z.enum(['unidad', 'kg', 'litro', 'metro']).optional(),
-    category: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Category ID format").optional()
-  })
+    category: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Category ID format").optional(),
+    // ─── Corrección de stock desde ProductManager ────────────────────────────
+    // new_stock: valor absoluto final que el usuario quiere que quede en inventario.
+    // stock_reason: motivo del ajuste (enum del modelo InventoryAdjustment).
+    // Si se envía new_stock, stock_reason es obligatorio también.
+    new_stock: z.number().min(0, "new_stock debe ser >= 0").optional(),
+    stock_reason: z.enum(
+      ['initial_count', 'damaged', 'stolen', 'expired', 'correction', 'other'],
+      { errorMap: () => ({ message: "stock_reason debe ser un motivo válido" }) }
+    ).optional()
+  }).refine(
+    // Regla: si se envía uno de los dos, se deben enviar ambos.
+    (body) => {
+      const hasStock  = body.new_stock  !== undefined;
+      const hasReason = body.stock_reason !== undefined;
+      return hasStock === hasReason; // ambos presentes o ambos ausentes
+    },
+    { message: "Si envías new_stock, debes enviar stock_reason también (y viceversa)" }
+  )
 });
 
 export const productIdSchema = z.object({
