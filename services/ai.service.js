@@ -26,11 +26,33 @@ const detectTemporalIntent = (question) => {
     return null;
 };
 
+// ─── Timezone: Venezuela (UTC-4) ──────────────────────────────────────
+// El Dashboard (frontend) agrupa fechas usando la hora LOCAL del navegador.
+// El backend (Vercel) corre en UTC. Sin esta corrección, una venta a las
+// 9pm Venezuela (1am UTC del día siguiente) se asignaría a un día distinto
+// en la IA vs la gráfica. Eso rompe la confianza del usuario.
+const VE_TIMEZONE = 'America/Caracas';
+const VE_OFFSET_MS = -4 * 60 * 60 * 1000; // UTC-4 en milisegundos
+
+/** Devuelve la medianoche de "hoy" en hora Venezuela, como objeto Date UTC */
+const getTodayVE = () => {
+    const nowUTC = Date.now();
+    const nowVE = new Date(nowUTC + VE_OFFSET_MS);
+    // Construir medianoche Venezuela como fecha UTC equivalente
+    const midnightVE = new Date(Date.UTC(
+        nowVE.getUTCFullYear(),
+        nowVE.getUTCMonth(),
+        nowVE.getUTCDate()
+    ));
+    // Restar el offset para obtener el instante UTC que corresponde a medianoche VE
+    return new Date(midnightVE.getTime() - VE_OFFSET_MS);
+};
+
 // ─── PASO 2: Aggregation Pipeline Condicional ─────────────────────────
 const fetchTemporalContext = async (userId, daysBack, label) => {
-    const startDate = new Date();
+    const todayVE = getTodayVE();
+    const startDate = new Date(todayVE);
     startDate.setDate(startDate.getDate() - daysBack);
-    startDate.setHours(0, 0, 0, 0);
 
     // Castear a ObjectId — aggregate() NO auto-castea strings como find()
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -40,7 +62,7 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
         { $match: { customer_id: userObjectId, createdAt: { $gte: startDate } } },
         {
             $group: {
-                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: VE_TIMEZONE } },
                 total_ventas: { $sum: '$total_amount' },
                 num_transacciones: { $sum: 1 }
             }
@@ -54,7 +76,7 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
         { $match: { admin_id: userObjectId, createdAt: { $gte: startDate } } },
         {
             $group: {
-                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: VE_TIMEZONE } },
                 total_gastos: { $sum: '$total_cost' }
             }
         },
@@ -87,8 +109,7 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
 // ─── SERVICIO PRINCIPAL ───────────────────────────────────────────────
 export const getAIAdviceStreamService = async (userId, userQuestion) => {
     // 1. Recopilar contexto BASE (datos del día — siempre se envían)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayVE();
     const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
     // Stock crítico
