@@ -4,8 +4,85 @@ import { Sale } from '../models/Sale.js';
 import { Purchase } from '../models/Purchase.js';
 import { SaleDetail } from '../models/SaleDetail.js';
 
+// ─── PASO 1: Detector de Intención Temporal (Regex, sin IA) ───────────
+const TEMPORAL_PATTERNS = [
+    { keywords: ['semana', 'semanal', '7 días', '7 dias', 'esta semana', 'últimos 7', 'ultimos 7'], days: 7, label: 'últimos 7 días' },
+    { keywords: ['mes', 'mensual', '30 días', '30 dias', 'este mes', 'últimos 30', 'ultimos 30'], days: 30, label: 'últimos 30 días' },
+    { keywords: ['ayer', 'día anterior', 'dia anterior'], days: 1, label: 'ayer' },
+    { keywords: ['quincena', '15 días', '15 dias', 'últimos 15', 'ultimos 15'], days: 15, label: 'últimos 15 días' },
+];
+
+const detectTemporalIntent = (question) => {
+    const normalized = question.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    for (const pattern of TEMPORAL_PATTERNS) {
+        for (const keyword of pattern.keywords) {
+            const normalizedKeyword = keyword.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            if (normalized.includes(normalizedKeyword)) {
+                return { days: pattern.days, label: pattern.label };
+            }
+        }
+    }
+    return null;
+};
+
+// ─── PASO 2: Aggregation Pipeline Condicional ─────────────────────────
+const fetchTemporalContext = async (userId, daysBack, label) => {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysBack);
+    startDate.setHours(0, 0, 0, 0);
+
+    // Pipeline 1: Ventas agrupadas por día
+    const salesByDay = await Sale.aggregate([
+        { $match: { customer_id: userId, createdAt: { $gte: startDate } } },
+        {
+            $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                total_ventas: { $sum: '$total_amount' },
+                num_transacciones: { $sum: 1 }
+            }
+        },
+        { $sort: { _id: 1 } },
+        { $limit: 30 }
+    ]);
+
+    // Pipeline 2: Gastos agrupados por día (misma ventana temporal)
+    const purchasesByDay = await Purchase.aggregate([
+        { $match: { admin_id: userId, createdAt: { $gte: startDate } } },
+        {
+            $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                total_gastos: { $sum: '$total_cost' }
+            }
+        },
+        { $sort: { _id: 1 } }
+    ]);
+
+    // Merge: unir ventas y gastos por fecha
+    const gastosMap = new Map(purchasesByDay.map(p => [p._id, p.total_gastos]));
+
+    const resumen_diario = salesByDay.map(day => ({
+        fecha: day._id,
+        total_ventas: day.total_ventas,
+        total_gastos: gastosMap.get(day._id) || 0,
+        ganancia: day.total_ventas - (gastosMap.get(day._id) || 0),
+        transacciones: day.num_transacciones
+    }));
+
+    const totalVentas = resumen_diario.reduce((acc, d) => acc + d.total_ventas, 0);
+    const promedio_diario = resumen_diario.length > 0
+        ? Math.round((totalVentas / resumen_diario.length) * 100) / 100
+        : 0;
+
+    return {
+        periodo: label,
+        resumen_diario,
+        promedio_diario
+    };
+};
+
+// ─── SERVICIO PRINCIPAL ───────────────────────────────────────────────
 export const getAIAdviceStreamService = async (userId, userQuestion) => {
-    // 1. Recopilar contexto de datos (limitado para ahorrar tokens)
+    // 1. Recopilar contexto BASE (datos del día — siempre se envían)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -20,12 +97,12 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
     const salesToday = await Sale.find({ customer_id: userId, createdAt: { $gte: today } }).lean();
     const incomeToday = salesToday.reduce((acc, sale) => acc + sale.total_amount, 0);
 
-    // Extraer detalle de ventas de hoy para el prompt (simplificado para no saturar tokens)
+    // Extraer detalle de ventas de hoy (simplificado para ahorrar tokens)
     const salesTodayIds = salesToday.map(s => s._id);
     const salesDetailsRaw = await SaleDetail.find({ sale_id: { $in: salesTodayIds } })
         .populate('product_id', 'name')
         .lean();
-    
+
     // Agrupar ventas de hoy por producto
     const ventasHoyResumen = {};
     for (const detail of salesDetailsRaw) {
@@ -66,6 +143,7 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
         { $project: { _id: 0, name: "$productInfo.name", totalSold: 1 } }
     ]);
 
+    // ─── PASO 3: Inyección Condicional de Contexto Temporal ───────────
     const contextData = {
         ventas_hoy,
         stock_critico: criticalStock.map(p => ({ nombre: p.name, stock: p.stock })),
@@ -73,32 +151,48 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
         balance: { ingresos_hoy: incomeToday, gastos_hoy: expenseToday, ganancia_neta: incomeToday - expenseToday }
     };
 
-    // 2. Definir Prompts
-    const systemPrompt = `### SYSTEM_PROMPT: CastillaWeb AI Business Advisor
+    const temporalIntent = detectTemporalIntent(userQuestion);
+    if (temporalIntent) {
+        const temporalData = await fetchTemporalContext(userId, temporalIntent.days, temporalIntent.label);
+        contextData.contexto_temporal = temporalData;
+    }
+
+    // ─── PASO 4: System Prompt v2 (con Inteligencia Temporal) ─────────
+    const systemPrompt = `### SYSTEM_PROMPT v2: CastillaWeb AI Business Advisor (Inteligencia Temporal)
 
 **ROL:**
-Eres el Asesor de Negocios Inteligente integrado en "CastillaWeb", un sistema POS (Punto de Venta) premium. Tu objetivo es ayudar al dueño de un negocio (bodega, ferretería, minimarket) en Venezuela a tomar decisiones basadas en sus datos reales.
+Eres el Asesor de Negocios Inteligente integrado en "CastillaWeb", un sistema POS premium. Tu objetivo es ayudar al dueño de un negocio (bodega, ferretería, minimarket) en Venezuela a tomar decisiones basadas en sus datos reales. No eres un chatbot genérico: eres un socio que tiene acceso directo a las cifras del negocio.
 
 **CONTEXTO DEL NEGOCIO:**
-- El usuario opera en un entorno volátil (Venezuela), por lo que la rotación de inventario y el flujo de caja son críticos.
-- Tu tono debe ser profesional, directo, brutalmente honesto y motivador. No uses lenguaje robótico; habla como un socio que quiere que el negocio crezca.
+- El usuario opera en un entorno volátil (Venezuela), donde la rotación de inventario y el flujo de caja son asunto de supervivencia, no de optimización.
+- Tu tono: profesional, directo, brutalmente honesto y motivador. Nada de lenguaje robótico. Hablas como un socio que tiene plata metida en el negocio.
 
 **CONOCIMIENTO TÉCNICO (DATA):**
-Recibirás un objeto JSON con:
-1. \`ventas_hoy\`: Lista de productos vendidos y montos.
-2. \`stock_critico\`: Productos con menos de 5 unidades.
-3. \`top_productos\`: Los 5 más vendidos del mes.
-4. \`balance\`: Total de ingresos vs gastos del día.
+Recibirás un objeto JSON que SIEMPRE contiene estos campos base:
+1. \`ventas_hoy\`: Lista de productos vendidos hoy con sus montos.
+2. \`stock_critico\`: Productos con menos de 5 unidades en inventario.
+3. \`top_productos\`: Los 5 más vendidos del mes en curso.
+4. \`balance\`: Ingresos vs gastos del día (ganancia neta).
+
+Además, el JSON PUEDE contener un campo OPCIONAL:
+5. \`contexto_temporal\`: Un objeto con:
+   - \`periodo\`: string que indica el rango (ej. "últimos 7 días", "últimos 30 días").
+   - \`resumen_diario\`: Array de objetos [{fecha, total_ventas, total_gastos, ganancia, transacciones}] ordenados del más antiguo al más reciente.
+   - \`promedio_diario\`: Número con el promedio de ventas diarias del periodo.
 
 **REGLAS DE RESPUESTA:**
-1. **Prioridad 1:** Si hay stock crítico, adviértelo de inmediato.
-2. **Prioridad 2:** Identifica fugas de dinero o productos que no se mueven ("huesos").
-3. **Prioridad 3:** Sugiere una acción concreta (ej. "Sube el precio un 5%" o "Haz un combo de harina con mantequilla").
-4. **Formato:** Usa Markdown para negritas y listas. Mantén la respuesta breve (máximo 150 palabras).
+1. **Prioridad 1 (Stock Crítico):** Si hay stock crítico, adviértelo de inmediato con tono de urgencia. No entierres esta alerta.
+2. **Prioridad 2 (Tendencia Temporal):** Si existe \`contexto_temporal\`, DEBES comparar el rendimiento de hoy frente al \`promedio_diario\`:
+   - Si hoy está **por encima** del promedio → Felicita brevemente pero redirige al stock ("vas bien, pero ¿tienes inventario para mantener este ritmo?").
+   - Si hoy está **por debajo** del promedio → Advierte con urgencia y sugiere una acción ("las ventas cayeron un X% vs tu promedio semanal, considera...").
+   - Identifica el mejor y peor día del periodo y menciónalos.
+3. **Prioridad 3 (Acción Concreta):** Siempre cierra con UNA acción ejecutable (ej. "Sube el precio un 5%", "Haz un combo de X con Y", "Pide 20 unidades de Z hoy").
+4. **Formato:** Usa Markdown para negritas y listas. Mantén la respuesta breve (máximo 200 palabras).
 
-**RESTRICCIÓN DE SEGURIDAD:**
-- No inventes datos que no estén en el JSON.
-- Si el usuario pregunta algo fuera del negocio (ej. "recetas de cocina"), responde: "Soy tu asesor de CastillaWeb, enfoquémonos en el dinero. ¿Qué quieres saber de tus ventas?".`;
+**RESTRICCIONES DE SEGURIDAD:**
+- NUNCA inventes datos que no estén en el JSON.
+- Si \`contexto_temporal\` NO existe en el JSON, NO menciones tendencias ni historial. Limítate a los datos del día.
+- Si el usuario pregunta algo fuera del negocio: "Soy tu asesor de CastillaWeb. Enfoquémonos en el dinero. ¿Qué quieres saber de tus ventas?"`;
 
     const userPromptText = `Aquí están los datos actuales de CastillaWeb:
 ${JSON.stringify(contextData, null, 2)}
@@ -109,7 +203,7 @@ Analiza y responde según tu rol.`;
 
     // 3. Inicializar Google Gen AI
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    
+
     // Generar respuesta vía Streaming
     const responseStream = await ai.models.generateContentStream({
         model: 'gemini-2.5-flash',
@@ -118,6 +212,6 @@ Analiza y responde según tu rol.`;
         ],
         config: { systemInstruction: systemPrompt }
     });
-    
+
     return responseStream;
 };
