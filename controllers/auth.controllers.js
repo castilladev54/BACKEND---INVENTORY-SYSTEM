@@ -28,7 +28,7 @@ export const createUser = async (req, res) => {
     }
 
     const hashedPassword = await bcryptjs.hash(password, 10);
-    
+
     // Inicia sus 7 días de prueba en el momento en que el admin lo crea
     const expireDate = new Date();
     expireDate.setDate(expireDate.getDate() + 7);
@@ -89,8 +89,21 @@ export const login = async (req, res) => {
 }
 
 export const logout = async (req, res) => {
-  res.clearCookie("token");
-  res.status(200).json({ success: true, message: "Logged out successfully" });
+  try {
+    // 1. Matar la cookie "token" forzando su expiración y pasando el mismo scope B2B
+    res.clearCookie("token", {
+      httpOnly: true, // Debe coincidir con tu login
+      secure: process.env.NODE_ENV === "production", // Importante si tu backend está en Vercel
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+      path: "/", // Abarca todas las rutas
+    });
+    // Añadir un header explícito para evitar cacheos (opcional pero muy recomendado en SaaS)
+    res.setHeader('Clear-Site-Data', '"cookies", "storage"');
+    res.status(200).json({ success: true, message: "Logged out successfully" });
+  } catch (error) {
+    console.error("Error in logout controller", error);
+    res.status(500).json({ success: false, message: "Server error during logout" });
+  }
 }
 
 export const forgotPassword = async (req, res) => {
@@ -175,10 +188,10 @@ export const purgeUserAndData = async (req, res) => {
     }
 
     const { targetUserId } = req.params;
-    
+
     // Evitar auto-eliminación por seguridad
     if (adminUser._id.toString() === targetUserId) {
-       return res.status(400).json({ success: false, message: "No puedes eliminar tu propia cuenta." });
+      return res.status(400).json({ success: false, message: "No puedes eliminar tu propia cuenta." });
     }
 
     // 1. Eliminar datos transaccionales en Cascada
