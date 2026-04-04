@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { GoogleGenAI } from '@google/genai';
 import { Product } from '../models/Product.js';
 import { Sale } from '../models/Sale.js';
@@ -31,9 +32,12 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
     startDate.setDate(startDate.getDate() - daysBack);
     startDate.setHours(0, 0, 0, 0);
 
+    // Castear a ObjectId — aggregate() NO auto-castea strings como find()
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
     // Pipeline 1: Ventas agrupadas por día
     const salesByDay = await Sale.aggregate([
-        { $match: { customer_id: userId, createdAt: { $gte: startDate } } },
+        { $match: { customer_id: userObjectId, createdAt: { $gte: startDate } } },
         {
             $group: {
                 _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -47,7 +51,7 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
 
     // Pipeline 2: Gastos agrupados por día (misma ventana temporal)
     const purchasesByDay = await Purchase.aggregate([
-        { $match: { admin_id: userId, createdAt: { $gte: startDate } } },
+        { $match: { admin_id: userObjectId, createdAt: { $gte: startDate } } },
         {
             $group: {
                 _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
