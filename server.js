@@ -10,6 +10,7 @@ import productRoutes from "./routes/product.route.js";
 import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
 import adjustmentRoutes from "./routes/adjustment.route.js";
+import aiRoutes from "./routes/ai.route.js";
 import { verifyToken } from "./middleware/verifyToken.js";
 import { checkSubscription } from "./middleware/checkSubscription.js";
 
@@ -58,6 +59,7 @@ app.use("/api/products", verifyToken, checkSubscription, productRoutes);
 app.use("/api/purchases", verifyToken, checkSubscription, purchaseRoutes);
 app.use("/api/sales", verifyToken, checkSubscription, saleRoutes);
 app.use("/api/adjustments", verifyToken, checkSubscription, adjustmentRoutes);
+app.use("/api/ai", verifyToken, checkSubscription, aiRoutes);
 
 // Manejador central de errores (siempre al final de las rutas)
 app.use(errorHandler);
