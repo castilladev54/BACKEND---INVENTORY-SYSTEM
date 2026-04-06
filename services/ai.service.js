@@ -26,6 +26,22 @@ const detectTemporalIntent = (question) => {
     return null;
 };
 
+// ─── Detector de Intención de Deudas/Proveedores ──────────────────────
+const DEBT_KEYWORDS = [
+    'deuda', 'deudas', 'debo', 'debemos', 'proveedor', 'proveedores',
+    'factura', 'facturas', 'pendiente', 'pendientes', 'vencida', 'vencidas',
+    'por pagar', 'cuentas por pagar', 'credito', 'crédito', 'abono', 'abonos',
+    'pagar', 'pagos pendientes', 'cuanto debo', 'cuánto debo', 'le debo'
+];
+
+const detectDebtIntent = (question) => {
+    const normalized = question.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return DEBT_KEYWORDS.some(kw => {
+        const normalizedKw = kw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        return normalized.includes(normalizedKw);
+    });
+};
+
 // ─── Timezone: Venezuela (UTC-4) ──────────────────────────────────────
 // El Dashboard (frontend) agrupa fechas usando la hora LOCAL del navegador.
 // El backend (Vercel) corre en UTC. Sin esta corrección, una venta a las
@@ -147,6 +163,33 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
     const purchasesToday = await Purchase.find({ admin_id: userId, createdAt: { $gte: today } }).lean();
     const expenseToday = purchasesToday.reduce((acc, purchase) => acc + purchase.total_cost, 0);
 
+    // Cuentas por Pagar (Facturas pendientes / vencidas)
+    const nextWeek = new Date(today);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    
+    const pendingPurchases = await Purchase.find({ admin_id: userId, status: { $ne: 'PAID' } }).lean();
+    
+    const cuentas_por_pagar = { 
+        vencidas: 0, monto_vencido: 0,
+        por_vencer: 0, monto_por_vencer: 0,
+        total_deuda_global: 0
+    };
+    const recordatorios_pago = [];
+
+    pendingPurchases.forEach(p => {
+        const remaining = p.total_cost - (p.paid_amount || 0);
+        cuentas_por_pagar.total_deuda_global += remaining;
+        if (p.due_date < today) {
+            cuentas_por_pagar.vencidas++;
+            cuentas_por_pagar.monto_vencido += remaining;
+            recordatorios_pago.push(`VENCIDA: Proveedor ${p.supplier}, se le debe $${remaining}`);
+        } else if (p.due_date <= nextWeek) {
+            cuentas_por_pagar.por_vencer++;
+            cuentas_por_pagar.monto_por_vencer += remaining;
+            recordatorios_pago.push(`POR VENCER (en menos de 7 días): Proveedor ${p.supplier}, se le debe $${remaining}`);
+        }
+    });
+
     // Top 5 Productos del Mes
     const monthlySales = await Sale.find({ customer_id: userId, createdAt: { $gte: firstDayOfMonth } }).select('_id').lean();
     const monthlySaleIds = monthlySales.map(m => m._id);
@@ -173,13 +216,42 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
         ventas_hoy,
         stock_critico: criticalStock.map(p => ({ nombre: p.name, stock: p.stock })),
         top_productos: topProductsRaw,
-        balance: { ingresos_hoy: incomeToday, gastos_hoy: expenseToday, ganancia_neta: incomeToday - expenseToday }
+        balance: { ingresos_hoy: incomeToday, gastos_hoy: expenseToday, ganancia_neta: incomeToday - expenseToday },
+        deudas: { resumen: cuentas_por_pagar, detalles: recordatorios_pago }
     };
 
     const temporalIntent = detectTemporalIntent(userQuestion);
     if (temporalIntent) {
         const temporalData = await fetchTemporalContext(userId, temporalIntent.days, temporalIntent.label);
         contextData.contexto_temporal = temporalData;
+    }
+
+    // ─── Inyección Condicional: Desglose de Deudas por Proveedor ──────
+    const debtIntent = detectDebtIntent(userQuestion);
+    if (debtIntent && pendingPurchases.length > 0) {
+        // Agrupar deudas por proveedor
+        const deudaPorProveedor = {};
+        pendingPurchases.forEach(p => {
+            const remaining = p.total_cost - (p.paid_amount || 0);
+            if (!deudaPorProveedor[p.supplier]) {
+                deudaPorProveedor[p.supplier] = { total_adeudado: 0, facturas: [] };
+            }
+            deudaPorProveedor[p.supplier].total_adeudado += remaining;
+
+            let estadoFactura = 'AL DIA';
+            if (p.due_date < today) estadoFactura = 'VENCIDA';
+            else if (p.due_date <= nextWeek) estadoFactura = 'POR VENCER';
+
+            deudaPorProveedor[p.supplier].facturas.push({
+                monto_total: p.total_cost,
+                abonado: p.paid_amount || 0,
+                pendiente: remaining,
+                estado: estadoFactura,
+                fecha_compra: p.date,
+                vence: p.due_date
+            });
+        });
+        contextData.desglose_proveedores = deudaPorProveedor;
     }
 
     // ─── PASO 4: System Prompt v2 (con Inteligencia Temporal) ─────────
@@ -198,20 +270,23 @@ Recibirás un objeto JSON que SIEMPRE contiene estos campos base:
 2. \`stock_critico\`: Productos con menos de 5 unidades en inventario.
 3. \`top_productos\`: Los 5 más vendidos del mes en curso.
 4. \`balance\`: Ingresos vs gastos del día (ganancia neta).
+5. \`deudas\`: Un resumen y detalle de las facturas a proveedores pendientes (Vencidas y Por Vencerse en 7 días). Incluye \`total_deuda_global\` con la suma total adeudada.
 
-Además, el JSON PUEDE contener un campo OPCIONAL:
-5. \`contexto_temporal\`: Un objeto con:
+Además, el JSON PUEDE contener campos OPCIONALES:
+6. \`contexto_temporal\`: Un objeto con:
    - \`periodo\`: string que indica el rango (ej. "últimos 7 días", "últimos 30 días").
    - \`resumen_diario\`: Array de objetos [{fecha, total_ventas, total_gastos, ganancia, transacciones}] ordenados del más antiguo al más reciente.
    - \`promedio_diario\`: Número con el promedio de ventas diarias del periodo.
+7. \`desglose_proveedores\`: Un objeto donde cada clave es el nombre de un proveedor y contiene \`total_adeudado\` y un array \`facturas\` con el detalle de cada factura (monto_total, abonado, pendiente, estado, fecha_compra, vence). Este campo SOLO aparece si el usuario pregunta sobre deudas o proveedores.
 
 **REGLAS DE RESPUESTA:**
-1. **Prioridad 1 (Stock Crítico):** Si hay stock crítico, adviértelo de inmediato con tono de urgencia. No entierres esta alerta.
-2. **Prioridad 2 (Tendencia Temporal):** Si existe \`contexto_temporal\`, DEBES comparar el rendimiento de hoy frente al \`promedio_diario\`:
+1. **Prioridad 1 (Deudas y Stock Crítico):** Si hay compras con monto_vencido mayor a 0 o stock crítico, adviértelo de inmediato con tono de urgencia. Aconseja pagar a los proveedores mencionados usando la caja si hay ganancias.
+2. **Prioridad 1.5 (Consulta de Deudas):** Si existe \`desglose_proveedores\`, el usuario está preguntando específicamente sobre sus deudas. DEBES responder con un resumen claro tipo tabla/lista: nombre del proveedor, cuánto se le debe en total, cuántas facturas tiene, y cuáles están vencidas. Menciona el \`total_deuda_global\` y compáralo con la ganancia neta o los ingresos de hoy para dar contexto ("le debes $X a 3 proveedores, pero hoy facturaste $Y, podrías cubrir al proveedor Z").
+3. **Prioridad 2 (Tendencia Temporal):** Si existe \`contexto_temporal\`, DEBES comparar el rendimiento de hoy frente al \`promedio_diario\`:
    - Si hoy está **por encima** del promedio → Felicita brevemente pero redirige al stock ("vas bien, pero ¿tienes inventario para mantener este ritmo?").
    - Si hoy está **por debajo** del promedio → Advierte con urgencia y sugiere una acción ("las ventas cayeron un X% vs tu promedio semanal, considera...").
    - Identifica el mejor y peor día del periodo y menciónalos.
-3. **Prioridad 3 (Acción Concreta):** Siempre cierra con UNA acción ejecutable (ej. "Sube el precio un 5%", "Haz un combo de X con Y", "Pide 20 unidades de Z hoy").
+4. **Prioridad 3 (Acción Concreta):** Siempre cierra con UNA acción ejecutable (ej. "Sube el precio un 5%", "Haz un combo de X con Y", "Pide 20 unidades de Z hoy").
 4. **Formato:** Usa Markdown para negritas y listas. Mantén la respuesta breve (máximo 200 palabras).
 
 **RESTRICCIONES DE SEGURIDAD:**

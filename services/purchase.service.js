@@ -3,7 +3,7 @@ import { Purchase } from '../models/Purchase.js';
 import { PurchaseDetail } from '../models/PurchaseDetail.js';
 import { Product } from '../models/Product.js';
 
-export const createPurchaseProcess = async (userId, supplier, items) => {
+export const createPurchaseProcess = async (userId, supplier, items, dueDate = null) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   
@@ -22,11 +22,16 @@ export const createPurchaseProcess = async (userId, supplier, items) => {
       total_cost += item.quantity * item.unit_cost;
     }
 
+    // Si no se envía fecha de vencimiento, por defecto 30 días
+    const defaultDueDate = new Date();
+    defaultDueDate.setDate(defaultDueDate.getDate() + 30);
+
     // 1. Crear Venta Principal
     const purchase = new Purchase({
       admin_id: userId,
       supplier,
-      total_cost
+      total_cost,
+      due_date: dueDate || defaultDueDate
     });
     await purchase.save({ session });
 
@@ -51,8 +56,9 @@ export const createPurchaseProcess = async (userId, supplier, items) => {
   }
 };
 
-export const fetchPurchases = async (userId) => {
-  return Purchase.find({ admin_id: userId })
+export const fetchPurchases = async (userId, filters = {}) => {
+  const query = { admin_id: userId, ...filters };
+  return Purchase.find(query)
     .populate('admin_id', 'name email')
     .sort({ createdAt: -1 })
     .lean();
@@ -70,4 +76,24 @@ export const fetchPurchaseById = async (id, userId) => {
     .lean();
 
   return { purchase, details };
+};
+
+export const registerPayment = async (purchaseId, userId, amount) => {
+  const purchase = await Purchase.findOne({ _id: purchaseId, admin_id: userId });
+  if (!purchase) throw new Error("Compra no encontrada.");
+
+  if (purchase.status === 'PAID') throw new Error("La compra ya se encuentra pagada completamente.");
+
+  purchase.paid_amount = (purchase.paid_amount || 0) + amount;
+
+  if (purchase.paid_amount >= purchase.total_cost) {
+    purchase.status = 'PAID';
+    purchase.paid_amount = purchase.total_cost; // Si se abona de más, nivelar.
+    purchase.payment_date = new Date();
+  } else {
+    purchase.status = 'PARTIAL';
+  }
+
+  await purchase.save();
+  return purchase;
 };

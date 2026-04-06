@@ -43,7 +43,7 @@ beforeAll(async () => {
   await mongoose.connect(mongoUri);
   // Pequeño delay para que el Replica Set termine de elegir el nodo PRIMARY
   // antes de intentar hacer transacciones, evitando el intermitente error 500.
-  await new Promise((r) => setTimeout(r, 1500));
+  await new Promise((r) => setTimeout(r, 2500));
 }, 120000); 
 
 afterAll(async () => {
@@ -226,6 +226,322 @@ describe('Purchase Controllers Integration', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.success).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // NUEVOS TESTS: Sistema de Control de Facturas (Facturación y Pagos)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('POST /api/purchases (due_date handling)', () => {
+    it('should assign a default due_date of 30 days when none is provided', async () => {
+      const beforeCreate = new Date();
+
+      const response = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Default Due Supplier',
+        items: [{ product_id: productId, quantity: 1, unit_cost: 50 }]
+      });
+
+      expect(response.status).toBe(201);
+
+      // Verificar en BD que el due_date se asignó ~30 días en el futuro
+      const purchase = await Purchase.findById(response.body.purchase._id);
+      const expectedMin = new Date(beforeCreate);
+      expectedMin.setDate(expectedMin.getDate() + 29); // margen de 1 día por timing
+
+      expect(purchase.due_date).toBeDefined();
+      expect(new Date(purchase.due_date).getTime()).toBeGreaterThan(expectedMin.getTime());
+      expect(purchase.status).toBe('PENDING');
+      expect(purchase.paid_amount).toBe(0);
+    });
+
+    it('should use a custom dueDate when provided in the request body', async () => {
+      const customDate = '2026-06-15T00:00:00.000Z';
+
+      const response = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Custom Due Supplier',
+        items: [{ product_id: productId, quantity: 2, unit_cost: 25 }],
+        dueDate: customDate
+      });
+
+      expect(response.status).toBe(201);
+
+      const purchase = await Purchase.findById(response.body.purchase._id);
+      expect(new Date(purchase.due_date).toISOString()).toBe(customDate);
+    });
+  });
+
+  describe('GET /api/purchases (Filtros por Estado y Vencimiento)', () => {
+    it('should filter purchases by status=PENDING', async () => {
+      // Crear una compra (status por defecto: PENDING)
+      await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Pending Supplier',
+        items: [{ product_id: productId, quantity: 1, unit_cost: 100 }]
+      });
+
+      const response = await request(app)
+        .get('/api/purchases?status=PENDING')
+        .set('Cookie', authCookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body.purchases.length).toBeGreaterThanOrEqual(1);
+      response.body.purchases.forEach(p => {
+        expect(p.status).toBe('PENDING');
+      });
+    });
+
+    it('should filter purchases by status=PAID (returns empty if none paid)', async () => {
+      // Crear una compra (status PENDING por defecto)
+      await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Unpaid Supplier',
+        items: [{ product_id: productId, quantity: 1, unit_cost: 50 }]
+      });
+
+      const response = await request(app)
+        .get('/api/purchases?status=PAID')
+        .set('Cookie', authCookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body.purchases).toHaveLength(0);
+    });
+
+    it('should filter overdue purchases (filterBy=overdue)', async () => {
+      // Crear compra con due_date en el pasado directamente en BD
+      const pastDate = new Date();
+      pastDate.setDate(pastDate.getDate() - 10); // Venció hace 10 días
+      
+      await Purchase.create({
+        admin_id: userId,
+        supplier: 'Overdue Supplier',
+        total_cost: 500,
+        due_date: pastDate,
+        status: 'PENDING',
+        paid_amount: 0
+      });
+
+      const response = await request(app)
+        .get('/api/purchases?filterBy=overdue')
+        .set('Cookie', authCookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body.purchases.length).toBeGreaterThanOrEqual(1);
+      
+      // Todas las devueltas deben tener due_date < hoy
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      response.body.purchases.forEach(p => {
+        expect(new Date(p.due_date).getTime()).toBeLessThan(today.getTime());
+      });
+    });
+
+    it('should filter expiring soon purchases (filterBy=expiringSoon)', async () => {
+      // Crear compra con due_date en 3 días (dentro del rango de 7 días)
+      const soonDate = new Date();
+      soonDate.setDate(soonDate.getDate() + 3);
+      
+      await Purchase.create({
+        admin_id: userId,
+        supplier: 'Soon Supplier',
+        total_cost: 300,
+        due_date: soonDate,
+        status: 'PENDING',
+        paid_amount: 0
+      });
+
+      const response = await request(app)
+        .get('/api/purchases?filterBy=expiringSoon')
+        .set('Cookie', authCookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body.purchases.length).toBeGreaterThanOrEqual(1);
+      
+      const supplierNames = response.body.purchases.map(p => p.supplier);
+      expect(supplierNames).toContain('Soon Supplier');
+    });
+
+    it('should NOT return PAID purchases in overdue or expiringSoon filters', async () => {
+      // Crear compra PAGADA con due_date vencida
+      const pastDate = new Date();
+      pastDate.setDate(pastDate.getDate() - 5);
+      
+      await Purchase.create({
+        admin_id: userId,
+        supplier: 'Already Paid Old',
+        total_cost: 200,
+        due_date: pastDate,
+        status: 'PAID',
+        paid_amount: 200,
+        payment_date: new Date()
+      });
+
+      const overdueRes = await request(app)
+        .get('/api/purchases?filterBy=overdue')
+        .set('Cookie', authCookie);
+
+      // La compra pagada NO debe aparecer en overdue
+      const overdueSuppliers = overdueRes.body.purchases.map(p => p.supplier);
+      expect(overdueSuppliers).not.toContain('Already Paid Old');
+    });
+  });
+
+  describe('PUT /api/purchases/:id/pay (Abonos y Pagos)', () => {
+    it('should register a PARTIAL payment and update status to PARTIAL', async () => {
+      // Crear compra de $1000
+      const createRes = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Partial Pay Supplier',
+        items: [{ product_id: productId, quantity: 10, unit_cost: 100 }]
+      });
+      const purchaseId = createRes.body.purchase._id;
+
+      // Abonar $400 de $1000
+      const payRes = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 400 });
+
+      expect(payRes.status).toBe(200);
+      expect(payRes.body.success).toBe(true);
+      expect(payRes.body.purchase.status).toBe('PARTIAL');
+      expect(payRes.body.purchase.paid_amount).toBe(400);
+      expect(payRes.body.purchase.payment_date).toBeUndefined(); // Aún no se ha liquidado
+    });
+
+    it('should mark purchase as PAID when full amount is covered', async () => {
+      // Crear compra de $500
+      const createRes = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Full Pay Supplier',
+        items: [{ product_id: productId, quantity: 5, unit_cost: 100 }]
+      });
+      const purchaseId = createRes.body.purchase._id;
+
+      // Pagar los $500 completos
+      const payRes = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 500 });
+
+      expect(payRes.status).toBe(200);
+      expect(payRes.body.purchase.status).toBe('PAID');
+      expect(payRes.body.purchase.paid_amount).toBe(500);
+      expect(payRes.body.purchase.payment_date).toBeDefined(); // Fecha de pago registrada
+    });
+
+    it('should accumulate multiple partial payments until PAID', async () => {
+      // Crear compra de $300
+      const createRes = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Multi Pay Supplier',
+        items: [{ product_id: productId, quantity: 3, unit_cost: 100 }]
+      });
+      const purchaseId = createRes.body.purchase._id;
+
+      // Primer abono: $100
+      const pay1 = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 100 });
+      expect(pay1.body.purchase.status).toBe('PARTIAL');
+      expect(pay1.body.purchase.paid_amount).toBe(100);
+
+      // Segundo abono: $100 → total $200
+      const pay2 = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 100 });
+      expect(pay2.body.purchase.status).toBe('PARTIAL');
+      expect(pay2.body.purchase.paid_amount).toBe(200);
+
+      // Tercer abono: $100 → total $300 = PAGADO
+      const pay3 = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 100 });
+      expect(pay3.body.purchase.status).toBe('PAID');
+      expect(pay3.body.purchase.paid_amount).toBe(300);
+      expect(pay3.body.purchase.payment_date).toBeDefined();
+    });
+
+    it('should cap paid_amount to total_cost if overpaying', async () => {
+      // Crear compra de $200
+      const createRes = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Overpay Supplier',
+        items: [{ product_id: productId, quantity: 2, unit_cost: 100 }]
+      });
+      const purchaseId = createRes.body.purchase._id;
+
+      // Pagar $999 (más del total de $200)
+      const payRes = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 999 });
+
+      expect(payRes.status).toBe(200);
+      expect(payRes.body.purchase.status).toBe('PAID');
+      expect(payRes.body.purchase.paid_amount).toBe(200); // Nivelado al total, no $999
+    });
+
+    it('should return 400 when trying to pay an already PAID purchase', async () => {
+      // Crear y pagar completamente
+      const createRes = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Double Pay Supplier',
+        items: [{ product_id: productId, quantity: 1, unit_cost: 50 }]
+      });
+      const purchaseId = createRes.body.purchase._id;
+
+      // Pagar todo
+      await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 50 });
+
+      // Intentar pagar de nuevo → ERROR
+      const payAgain = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 10 });
+
+      expect(payAgain.status).toBe(400);
+      expect(payAgain.body.message).toContain('pagada completamente');
+    });
+
+    it('should return 400 if amount is zero or negative', async () => {
+      const createRes = await request(app).post('/api/purchases').set('Cookie', authCookie).send({
+        admin_id: userId,
+        supplier: 'Zero Pay Supplier',
+        items: [{ product_id: productId, quantity: 1, unit_cost: 100 }]
+      });
+      const purchaseId = createRes.body.purchase._id;
+
+      const zeroRes = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 0 });
+      expect(zeroRes.status).toBe(400);
+
+      const negativeRes = await request(app)
+        .put(`/api/purchases/${purchaseId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: -50 });
+      expect(negativeRes.status).toBe(400);
+    });
+
+    it('should return 404 when paying a non-existent purchase', async () => {
+      const fakeId = new mongoose.Types.ObjectId().toString();
+      const response = await request(app)
+        .put(`/api/purchases/${fakeId}/pay`)
+        .set('Cookie', authCookie)
+        .send({ amount: 100 });
+
+      expect(response.status).toBe(404);
+      expect(response.body.message).toContain('no encontrada');
     });
   });
 });
