@@ -85,7 +85,8 @@ export const payPurchase = async (req, res) => {
     const purchase = await registerPayment(id, req.userId, amount);
 
     // Invalidar caché general de compras para asegurar que la lista refleje el pago
-    await invalidateCache(`purchases:${req.userId}`);
+    // También invalidar el caché individual de la compra actual
+    await invalidateCache(`purchases:${req.userId}`, `purchase:${id}:${req.userId}`);
 
     res.status(200).json({
       success: true,
