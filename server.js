@@ -20,7 +20,7 @@ import categoryRoutes from "./routes/category.route.js";
 import productRoutes from "./routes/product.route.js";
 import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
-import adjustmentRoutes from "./routes/adjustment.js";
+import adjustmentRoutes from "./routes/adjustment.route.js";
 import aiRoutes from "./routes/ai.route.js";
 
 dotenv.config();
