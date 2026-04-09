@@ -2,24 +2,26 @@ import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { sanitizeNoSQL } from "./middleware/sanitize.js";
 import hpp from "hpp";
+import cookieParser from "cookie-parser";
+import path from "path";
+
+// Configuraciones y Libs
+import { connectDB } from "./lib/db.js";
+import { sanitizeNoSQL } from "./middleware/sanitize.js";
+import { globalLimiter, authLimiter } from "./middleware/rateLimiter.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+import { verifyToken } from "./middleware/verifyToken.js";
+import { checkSubscription } from "./middleware/checkSubscription.js";
+
+// Rutas
 import authRoutes from "./routes/auth.route.js";
 import categoryRoutes from "./routes/category.route.js";
 import productRoutes from "./routes/product.route.js";
 import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
-import adjustmentRoutes from "./routes/adjustment.route.js";
+import adjustmentRoutes from "./routes/adjustment.js";
 import aiRoutes from "./routes/ai.route.js";
-import { verifyToken } from "./middleware/verifyToken.js";
-import { checkSubscription } from "./middleware/checkSubscription.js";
-
-import cookieParser from "cookie-parser";
-import path from "path";
-
-import { connectDB } from "./lib/db.js";
-import { globalLimiter, authLimiter } from "./middleware/rateLimiter.js";
-import { errorHandler } from "./middleware/errorHandler.js";
 
 dotenv.config();
 
@@ -27,63 +29,65 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const __dirname = path.resolve();
 
-// ─── Security Middleware ──────────────────────────────────────
+// 1. SEGURIDAD (Filtros de entrada)
 app.use(helmet());
-app.use(sanitizeNoSQL);
 app.use(hpp());
+app.use(sanitizeNoSQL);
 app.use(globalLimiter);
 
-// ─── Body Parsing ─────────────────────────────────────────────
-app.use(cors({ origin: [process.env.CLIENT_URL, "https://dashboard-react-tailwindcss.vercel.app", "http://localhost:5173"].filter(Boolean), credentials: true }));
+// 2. CONFIGURACIÓN Y PARSING
+app.use(cors({
+  origin: [process.env.CLIENT_URL, "https://dashboard-react-tailwindcss.vercel.app", "http://localhost:5173"].filter(Boolean),
+  credentials: true
+}));
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());
 
-// Health Check Endpoint
-app.get("/api/health", (req, res) => {
-  res.status(200).json({ status: "ok" });
-});
+// 3. RUTAS PÚBLICAS Y MONITOREO
+app.get("/api/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
 
-// Root Route
-app.get("/", (req, res) => {
-  res.send("<h1>🚀 API del Sistema de Inventario Funcionando</h1><p>Versión 1.0.0</p>");
-});
-
-// ─── Routes ───────────────────────────────────────────────────
-// Auth routes are public (login, signup, etc.)
+// Auth: Rate limit específico para evitar fuerza bruta
 app.use("/api/auth", authLimiter, authRoutes);
 
+// 4. RUTAS PROTEGIDAS (Middleware de flujo)
+// Aplicamos el middleware a nivel de prefijo para no repetirlo en cada línea
+const protectedRouter = express.Router();
+protectedRouter.use(verifyToken, checkSubscription);
 
-// Protected routes — require authentication
-app.use("/api/categories", verifyToken, checkSubscription, categoryRoutes);
-app.use("/api/products", verifyToken, checkSubscription, productRoutes);
-app.use("/api/purchases", verifyToken, checkSubscription, purchaseRoutes);
-app.use("/api/sales", verifyToken, checkSubscription, saleRoutes);
-app.use("/api/adjustments", verifyToken, checkSubscription, adjustmentRoutes);
-app.use("/api/ai", verifyToken, checkSubscription, aiRoutes);
+app.use("/api/categories", protectedRouter, categoryRoutes);
+app.use("/api/products", protectedRouter, productRoutes);
+app.use("/api/purchases", protectedRouter, purchaseRoutes);
+app.use("/api/sales", protectedRouter, saleRoutes);
+app.use("/api/adjustments", protectedRouter, adjustmentRoutes);
+app.use("/api/ai", protectedRouter, aiRoutes);
 
-// Manejador central de errores (siempre al final de las rutas)
-app.use(errorHandler);
-
-
+// 5. FRONTEND (Producción)
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "/frontend/dist")));
-
-  app.use((req, res) => {
+  app.get("*", (req, res) => {
     res.sendFile(path.resolve(__dirname, "frontend", "dist", "index.html"));
   });
 }
 
-// ─── Startup ───────────────────────────────────────────────────
-if (process.env.NODE_ENV !== "test") {
-  connectDB(); // Se conecta a la BD incluso en Vercel
-}
+// 6. MANEJO DE ERRORES (Debe ser el último)
+app.use(errorHandler);
 
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log("Server is running on port http://localhost:" + PORT);
-  });
-}
+// 7. ARRANQUE CONTROLADO
+const startApp = async () => {
+  try {
+    await connectDB();
+    if (process.env.NODE_ENV !== "test") {
+      app.listen(PORT, () => {
+        console.log(`🚀 Servidor en: http://localhost:${PORT}`);
+      });
+    }
+  } catch (error) {
+    console.error("❌ Error fatal al iniciar:", error.message);
+    process.exit(1); // Cerramos si no hay DB
+  }
+};
 
-export default app;
+startApp();
 
+export default app; 
