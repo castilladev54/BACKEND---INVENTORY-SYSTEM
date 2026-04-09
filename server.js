@@ -83,11 +83,14 @@ const startApp = async () => {
       });
     }
   } catch (error) {
-    console.error("❌ Error fatal al iniciar:", error.message);
-    process.exit(1); // Cerramos si no hay DB
+    if (process.env.NODE_ENV !== "test") {
+      console.error("❌ Error fatal al iniciar:", error.message);
+      process.exit(1); // Cerramos si no hay DB
+    }
   }
 };
-
-startApp();
-
+// 2. La llamada a startApp también debe tener el guard:
+if (process.env.NODE_ENV !== "test") {
+  startApp();
+}
 export default app; 
