@@ -73,24 +73,26 @@ if (process.env.NODE_ENV === "production") {
 // 6. MANEJO DE ERRORES (Debe ser el último)
 app.use(errorHandler);
 
-// 7. ARRANQUE CONTROLADO
+// 7. ARRANQUE CONTROLADO (Optimizado para Vercel)
 const startApp = async () => {
   try {
-    await connectDB();
-    if (process.env.NODE_ENV !== "test") {
+    // En Vercel, es mejor que la conexión se gestione dentro de los handlers
+    // pero para mantener tu estructura, solo llamamos a listen si NO es Vercel
+    if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
+      await connectDB();
       app.listen(PORT, () => {
-        console.log(`🚀 Servidor en: http://localhost:${PORT}`);
+        console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
       });
     }
   } catch (error) {
     if (process.env.NODE_ENV !== "test") {
       console.error("❌ Error fatal al iniciar:", error.message);
-      process.exit(1); // Cerramos si no hay DB
+      process.exit(1);
     }
   }
 };
-// 2. La llamada a startApp también debe tener el guard:
-if (process.env.NODE_ENV !== "test") {
-  startApp();
-}
+
+startApp();
+
+// IMPORTANTE: Exportar para Vercel
 export default app; 
