@@ -5,6 +5,7 @@ import helmet from "helmet";
 import hpp from "hpp";
 import cookieParser from "cookie-parser";
 import path from "path";
+import mongoose from "mongoose";
 
 // Configuraciones y Libs
 import { connectDB } from "./lib/db.js";
@@ -29,6 +30,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const __dirname = path.resolve();
 
+// Confiar en el proxy de Vercel para rate limiting correcto
+app.set('trust proxy', 1);
+
 // 1. SEGURIDAD (Filtros de entrada)
 app.use(helmet());
 app.use(hpp());
@@ -44,7 +48,19 @@ app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());
 
-// 3. RUTAS PÚBLICAS Y MONITOREO
+// 3. LAZY DB CONNECTION (para Vercel serverless: conectar antes de cada request si no está conectado)
+app.use(async (req, res, next) => {
+  if (mongoose.connection.readyState === 0) {
+    try {
+      await connectDB();
+    } catch (err) {
+      return res.status(503).json({ success: false, message: "Service temporarily unavailable" });
+    }
+  }
+  next();
+});
+
+// 4. RUTAS PÚBLICAS Y MONITOREO
 app.get("/api/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
 
 // Auth: Rate limit específico para evitar fuerza bruta
@@ -62,8 +78,8 @@ app.use("/api/sales", protectedRouter, saleRoutes);
 app.use("/api/adjustments", protectedRouter, adjustmentRoutes);
 app.use("/api/ai", protectedRouter, aiRoutes);
 
-// 5. FRONTEND (Producción)
-if (process.env.NODE_ENV === "production") {
+// 5. FRONTEND (Producción local únicamente — en Vercel el frontend es una app separada)
+if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
   app.use(express.static(path.join(__dirname, "/frontend/dist")));
   app.get(/(.*)/, (req, res) => {
     res.sendFile(path.resolve(__dirname, "frontend", "dist", "index.html"));
