@@ -65,14 +65,13 @@ app.use("/api/ai", protectedRouter, aiRoutes);
 // 5. FRONTEND (Producción)
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "/frontend/dist")));
-  app.get("*", (req, res) => {
+  app.get(/(.*)/, (req, res) => {
     res.sendFile(path.resolve(__dirname, "frontend", "dist", "index.html"));
   });
 }
 
 // 6. MANEJO DE ERRORES (Debe ser el último)
 app.use(errorHandler);
-
 // 7. ARRANQUE CONTROLADO (Optimizado para Vercel)
 const startApp = async () => {
   try {
