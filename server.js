@@ -111,3 +111,5 @@ startApp();
 
 // IMPORTANTE: Exportar para Vercel
 export default app; 
+
+/** Testing de rutina los commit son adictivos */
