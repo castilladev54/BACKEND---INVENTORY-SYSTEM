@@ -1,4 +1,6 @@
-import dotenv from "dotenv";
+// ⚠️ DEBE ser el primer import: carga .env antes que cualquier otro módulo
+import "dotenv/config";
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -23,8 +25,6 @@ import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
 import adjustmentRoutes from "./routes/adjustment.route.js";
 import aiRoutes from "./routes/ai.route.js";
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -111,5 +111,4 @@ startApp();
 
 // IMPORTANTE: Exportar para Vercel
 export default app; 
-
-/** Testing de rutina los commit son adictivos */
+
