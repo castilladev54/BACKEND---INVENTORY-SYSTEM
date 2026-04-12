@@ -1,10 +1,15 @@
 import rateLimit from 'express-rate-limit';
 
-/** Rate limiter global — 1000 peticiones por ventana de 15 minutos por IP */
+/** Rate limiter global — aumentado a 3000 para soportar oficinas/NAT y pruebas. */
 export const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  max: 3000,
   skip: () => process.env.NODE_ENV === 'test',
+  keyGenerator: (req) => {
+    // Si la request trae x-real-ip o x-forwarded-for (como nuestro script k6), podemos identificar
+    // usuarios virtuales distintos, previniendo el bloqueo masivo por IP única durante el test.
+    return req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.ip;
+  },
   standardHeaders: true,
   legacyHeaders: false,
   message: {

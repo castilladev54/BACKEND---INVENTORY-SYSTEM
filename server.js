@@ -33,6 +33,10 @@ const __dirname = path.resolve();
 // Confiar en el proxy de Vercel para rate limiting correcto
 app.set('trust proxy', 1);
 
+// 0. HEALTH CHECK (Antes del Rate Limiter y de la inicialización de BD)
+// Un health check no debe bloquearse por IP ni esperar a la base de datos para responder.
+app.get("/api/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
+
 // 1. SEGURIDAD (Filtros de entrada)
 app.use(helmet());
 app.use(hpp());
@@ -61,7 +65,6 @@ app.use(async (req, res, next) => {
 });
 
 // 4. RUTAS PÚBLICAS Y MONITOREO
-app.get("/api/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
 
 // Auth: Rate limit específico para evitar fuerza bruta
 app.use("/api/auth", authLimiter, authRoutes);
