@@ -1,4 +1,4 @@
-import { invalidateCache } from '../lib/redis.js';
+import { invalidateCache, getOrSetCache } from '../lib/redis.js';
 import { createAdjustmentProcess, fetchAdjustments } from '../services/adjustment.service.js';
 
 export const createAdjustment = async (req, res) => {
@@ -29,8 +29,12 @@ export const createAdjustment = async (req, res) => {
 
 export const getAdjustments = async (req, res) => {
   try {
-    const adjustments = await fetchAdjustments(req.userId);
-    res.status(200).json({ success: true, adjustments });
+    const { data: adjustments, fromCache } = await getOrSetCache(
+      `adjustments:${req.userId}`,
+      () => fetchAdjustments(req.userId),
+      300 // 5 minutos: los ajustes cambian menos que ventas/compras
+    );
+    res.status(200).json({ success: true, adjustments, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

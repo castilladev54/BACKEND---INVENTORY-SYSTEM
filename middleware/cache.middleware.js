@@ -3,52 +3,64 @@ import { redis } from '../lib/redis.js';
 /**
  * Middleware para servir y guardar datos en caché usando Upstash Redis.
  * Elimina la responsabilidad del caché de lectura directamente de los controladores.
- * 
- * @param {string} prefix   - Prefijo del key de caché (ej. 'products', 'categories')
- * @param {string} dataKey  - La propiedad del JSON de respuesta que contiene la data a cachear (ej. 'products', 'product')
- * @param {string} paramKey - (Opcional) Si la ruta tiene un parámetro dinámico (ej. 'id' o 'code')
+ *
+ * @param {string} prefix        - Prefijo del key de caché (ej. 'products', 'categories')
+ * @param {string} dataKey       - Propiedad del JSON de respuesta que contiene la data (ej. 'products')
+ * @param {string} [paramKey]    - (Opcional) Parámetro dinámico de la ruta (ej. 'id', 'code')
+ * @param {number} [ttl=3600]    - Tiempo de vida en segundos (default: 1 hora)
  */
-export const cacheMiddleware = (prefix, dataKey, paramKey = null) => {
+export const cacheMiddleware = (prefix, dataKey, paramKey = null, ttl = 3600) => {
   return async (req, res, next) => {
     try {
-      // Generamos la clave dinámica
+      // Fix #1 — Guard: sin userId no se puede construir una key segura.
+      // Si la ruta es pública o verifyToken no corrió, saltamos el caché.
+      if (!req.userId) {
+        return next();
+      }
+
+      // Construimos la clave dinámica y determinista por usuario
       let key = `${prefix}:`;
       if (paramKey && req.params[paramKey]) {
         key += `${req.params[paramKey]}:`;
       }
       key += req.userId;
 
-      // 1. Verificar si existe en caché
+      // 1. Hit de caché → responder directamente
       const cachedData = await redis.get(key);
 
       if (cachedData) {
         return res.status(200).json({
           success: true,
-          [dataKey]: typeof cachedData === 'string' ? JSON.parse(cachedData) : cachedData,
-          fromCache: true
+          // Fix #2 — Upstash ya deserializa el JSON automáticamente,
+          // no hace falta JSON.parse ni el ternario defensivo.
+          [dataKey]: cachedData,
+          fromCache: true,
         });
       }
 
-      // 2. Si no existe, interceptamos res.json para atrapar los datos antes de enviarlos
+      // 2. Miss de caché → interceptar res.json para guardar antes de enviar
       const originalJson = res.json;
+
       res.json = function (body) {
-        // Asegurarnos de que no hubo error y de que la data que esperamos exista en la respuesta
         if (res.statusCode >= 200 && res.statusCode < 300 && body.success && body[dataKey]) {
-          // Caching asíncrono "Fire and Forget" para no bloquear la request (1 hora default)
-          redis.set(key, JSON.stringify(body[dataKey]), { ex: 3600 })
-            .catch(err => console.error("Redis set error:", err));
+          // Fix #2 — Guardar el objeto directamente (sin JSON.stringify).
+          //           Upstash lo serializa internamente al almacenarlo.
+          // Fix #3 — TTL configurable por instancia del middleware.
+          redis.set(key, body[dataKey], { ex: ttl })
+            .catch(err => console.error('Redis set error:', err));
+
+          // Fix #5 — fromCache: false solo en respuestas exitosas
+          return originalJson.call(this, { ...body, fromCache: false });
         }
 
-        // Ejecutamos la función original para mandar respuesta al cliente
-        // Le pasamos explicitly fromCache: false
-        const newBody = { ...body, fromCache: false };
-        return originalJson.call(this, newBody);
+        // Respuestas de error (4xx / 5xx): no contaminar el body con fromCache
+        return originalJson.call(this, body);
       };
 
       next();
     } catch (error) {
-      console.error("Cache Middleware Error:", error);
-      // Si Redis falla, no bloqueamos la API, pasa de largo hacia MongoDB
+      console.error('Cache Middleware Error:', error);
+      // Fail-open: si Redis falla, la petición sigue hacia MongoDB
       next();
     }
   };

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { Product } from '../models/Product.js';
 import { Category } from '../models/Category.js';
-import { invalidateCache } from '../lib/redis.js';
+import { invalidateCache, getOrSetCache } from '../lib/redis.js';
 import { createAdjustmentProcess } from '../services/adjustment.service.js';
 
 export const createProduct = async (req, res) => {
@@ -53,8 +53,11 @@ export const createProduct = async (req, res) => {
 
 export const getProducts = async (req, res) => {
   try {
-    const products = await Product.find({ user: req.userId }).populate('category', 'name').lean();
-    res.status(200).json({ success: true, products });
+    const cacheKey = `products:${req.userId}`;
+    const { data: products, fromCache } = await getOrSetCache(cacheKey, () =>
+      Product.find({ user: req.userId }).populate('category', 'name').lean()
+    );
+    res.status(200).json({ success: true, products, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -63,13 +66,16 @@ export const getProducts = async (req, res) => {
 export const getProductById = async (req, res) => {
   try {
     const { id } = req.params;
-    const product = await Product.findOne({ _id: id, user: req.userId }).populate('category', 'name').lean();
+    const cacheKey = `product:${id}:${req.userId}`;
+    const { data: product, fromCache } = await getOrSetCache(cacheKey, () =>
+      Product.findOne({ _id: id, user: req.userId }).populate('category', 'name').lean()
+    );
 
     if (!product) {
       return res.status(404).json({ success: false, message: "Producto no encontrado" });
     }
 
-    res.status(200).json({ success: true, product });
+    res.status(200).json({ success: true, product, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -79,10 +85,13 @@ export const getProductById = async (req, res) => {
 export const getProductByBarcode = async (req, res) => {
   try {
     const { code } = req.params;
+    const cacheKey = `barcode:${code}:${req.userId}`;
 
-    const product = await Product.findOne({ barcode: code, user: req.userId })
+    const { data: product, fromCache } = await getOrSetCache(cacheKey, () =>
+      Product.findOne({ barcode: code, user: req.userId })
         .populate('category', 'name')
-        .lean();
+        .lean()
+    );
 
     if (!product) {
       return res.status(404).json({
@@ -91,7 +100,7 @@ export const getProductByBarcode = async (req, res) => {
       });
     }
 
-    res.status(200).json({ success: true, product });
+    res.status(200).json({ success: true, product, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -101,6 +110,14 @@ export const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, price, category, unit_type, barcode, new_stock, stock_reason } = req.body;
+
+    // ── 0. Capturar barcode actual SOLO si viene en la request ────────────────
+    // Sin esto, la invalidación del caché de barcode viejo sería imposible.
+    let oldBarcode;
+    if (barcode !== undefined) {
+      const old = await Product.findOne({ _id: id, user: req.userId }, 'barcode').lean();
+      oldBarcode = old?.barcode;
+    }
 
     // ── 1. Validar categoría si se envía ─────────────────────────────────────
     if (category) {
@@ -142,11 +159,11 @@ export const updateProduct = async (req, res) => {
         return res.status(404).json({ success: false, message: "Producto no encontrado" });
       }
 
-      await invalidateCache(
-        `products:${req.userId}`,
-        `product:${id}:${req.userId}`,
-        `barcode:${barcode}:${req.userId}`
-      );
+      // Fix: keys seguras, sin undefined. Invalida barcode viejo y nuevo si cambiaron.
+      const keysToInvalidate = [`products:${req.userId}`, `product:${id}:${req.userId}`];
+      if (oldBarcode) keysToInvalidate.push(`barcode:${oldBarcode}:${req.userId}`);
+      if (barcode && barcode !== oldBarcode) keysToInvalidate.push(`barcode:${barcode}:${req.userId}`);
+      await invalidateCache(...keysToInvalidate);
 
       return res.status(200).json({ success: true, product });
     }
@@ -183,12 +200,15 @@ export const updateProduct = async (req, res) => {
       await createAdjustmentProcess(req.userId, id, new_stock, stock_reason, 'Corrección desde edición de producto');
 
       // Invalidar caché después de todo
-      await invalidateCache(
+      // Fix: keys seguras, sin undefined. Invalida barcode viejo y nuevo si cambiaron.
+      const keysToInvalidate = [
         `products:${req.userId}`,
         `product:${id}:${req.userId}`,
         `adjustments:${req.userId}`,
-        `barcode:${barcode}:${req.userId}`
-      );
+      ];
+      if (oldBarcode) keysToInvalidate.push(`barcode:${oldBarcode}:${req.userId}`);
+      if (barcode && barcode !== oldBarcode) keysToInvalidate.push(`barcode:${barcode}:${req.userId}`);
+      await invalidateCache(...keysToInvalidate);
 
       return res.status(200).json({
         success: true,

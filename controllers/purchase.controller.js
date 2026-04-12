@@ -1,4 +1,4 @@
-import { invalidateCache } from '../lib/redis.js';
+import { invalidateCache, getOrSetCache } from '../lib/redis.js';
 import { createPurchaseProcess, fetchPurchases, fetchPurchaseById, registerPayment } from '../services/purchase.service.js';
 
 export const createPurchase = async (req, res) => {
@@ -34,17 +34,30 @@ export const getPurchases = async (req, res) => {
     if (status) filters.status = status;
 
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Inicio del día
+    today.setHours(0, 0, 0, 0);
 
     if (filterBy === 'expiringSoon') {
         const nextWeek = new Date(today);
         nextWeek.setDate(today.getDate() + 7);
-        
         filters.status = { $ne: 'PAID' };
         filters.due_date = { $gte: today, $lte: nextWeek };
     } else if (filterBy === 'overdue') {
         filters.status = { $ne: 'PAID' };
         filters.due_date = { $lt: today };
+    }
+
+    // Solo cacheamos la consulta sin filtros.
+    // Las consultas filtradas van directo a MongoDB para evitar explotar las keys de caché
+    // (no podemos invalidar por patrón en Upstash Redis).
+    const hasFilters = status || filterBy;
+
+    if (!hasFilters) {
+      const { data: purchases, fromCache } = await getOrSetCache(
+        `purchases:${req.userId}`,
+        () => fetchPurchases(req.userId, {}),
+        120 // 2 minutos: las compras cambian con frecuencia
+      );
+      return res.status(200).json({ success: true, purchases, fromCache });
     }
 
     const purchases = await fetchPurchases(req.userId, filters);
