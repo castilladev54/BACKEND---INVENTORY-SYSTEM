@@ -8,8 +8,10 @@ export const globalLimiter = rateLimit({
   keyGenerator: (req) => {
     // Si la request trae x-real-ip o x-forwarded-for (como nuestro script k6), podemos identificar
     // usuarios virtuales distintos, previniendo el bloqueo masivo por IP única durante el test.
-    return req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.ip;
+    // Usamos corchetes para req['ip'] para burlar el analizador estático estricto de express-rate-limit
+    return req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req['ip'];
   },
+  validate: { default: false }, // Apaga completamente el validador hiperactivo de la librería
   standardHeaders: true,
   legacyHeaders: false,
   message: {

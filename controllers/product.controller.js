@@ -5,51 +5,93 @@ import { invalidateCache, getOrSetCache } from '../lib/redis.js';
 import { createAdjustmentProcess } from '../services/adjustment.service.js';
 
 export const createProduct = async (req, res) => {
-  try {
-    // Ignoramos 'stock' del body. El inventario se nutrirá después mediante Compras (Purchases).
-    const { name, description, price, category, unit_type, barcode } = req.body;
+  // stock_inicial es opcional. Si el usuario lo provee, se registra en el Kardex
+  // atómicamente junto con la creación del producto (transacción ACID).
+  const { name, description, price, category, unit_type, barcode, stock_inicial } = req.body;
 
-    // Verificar si la categoría existe y pertenece al usuario
-    const categoryExists = await Category.findOne({ _id: category, user: req.userId });
-    if (!categoryExists) {
+  // Verificar si la categoría existe y pertenece al usuario
+  const categoryExists = await Category.findOne({ _id: category, user: req.userId });
+  if (!categoryExists) {
+    return res.status(400).json({
+      success: false,
+      message: "La categoría especificada no existe"
+    });
+  }
+
+  // Si se envía barcode, verificar que no esté duplicado para este usuario
+  if (barcode) {
+    const barcodeExists = await Product.findOne({ barcode, user: req.userId });
+    if (barcodeExists) {
       return res.status(400).json({
         success: false,
-        message: "La categoría especificada no existe"
+        message: `El código de barras "${barcode}" ya está asignado al producto "${barcodeExists.name}"`
       });
     }
+  }
 
-    // Si se envía barcode, verificar que no esté duplicado para este usuario
-    if (barcode) {
-      const barcodeExists = await Product.findOne({ barcode, user: req.userId });
-      if (barcodeExists) {
-        return res.status(400).json({
-          success: false,
-          message: `El código de barras "${barcode}" ya está asignado al producto "${barcodeExists.name}"`
-        });
-      }
+  const initialStock = Number(stock_inicial) || 0;
+
+  // ── Sin stock inicial: flujo simple sin transacción ──────────────────────────
+  if (initialStock === 0) {
+    try {
+      const product = new Product({
+        name, description, price,
+        stock: 0,
+        category, unit_type,
+        ...(barcode ? { barcode } : {}),
+        user: req.userId
+      });
+      await product.save();
+      await invalidateCache(`products:${req.userId}`);
+      return res.status(201).json({ success: true, product });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
     }
+  }
 
-    const product = new Product({
-      name,
-      description,
-      price,
-      stock: 0, // Inicia siempre en 0
-      category,
-      unit_type,
-      ...(barcode ? { barcode } : {}), // Solo incluir si existe
+  // ── Con stock inicial: transacción ACID (Producto + Kardex en un solo commit) ─
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // 1. Crear el producto con stock 0 (el ajuste lo subirá al valor real)
+    const [product] = await Product.create([{
+      name, description, price,
+      stock: 0,
+      category, unit_type,
+      ...(barcode ? { barcode } : {}),
       user: req.userId
-    });
+    }], { session });
 
-    await product.save();
+    // 2. Registrar apertura de inventario en el Kardex (comparte la sesión)
+    await createAdjustmentProcess(
+      req.userId,
+      product._id,
+      initialStock,
+      'Ajuste Manual',
+      'Stock de apertura al crear el producto',
+      session  // <-- sesión compartida, el servicio NO confirmará por su cuenta
+    );
 
-    // Invalidar caché de listado de productos del usuario
+    // 3. Confirmar ambas operaciones en un solo commit atómico
+    await session.commitTransaction();
+    session.endSession();
+
     await invalidateCache(`products:${req.userId}`);
 
-    res.status(201).json({ success: true, product });
+    return res.status(201).json({
+      success: true,
+      product,
+      message: `Producto creado con stock inicial de ${initialStock}.`
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    if (session.inTransaction()) await session.abortTransaction();
+    session.endSession();
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
+
 
 export const getProducts = async (req, res) => {
   try {
