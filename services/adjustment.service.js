@@ -74,11 +74,3 @@ export const fetchAdjustments = async (userId) => {
     .sort({ createdAt: -1 })
     .lean();
 };
-
-
-export const fetchAdjustments = async (userId) => {
-  return InventoryAdjustment.find({ user_id: userId })
-    .populate('product_id', 'name barcode price')
-    .sort({ createdAt: -1 })
-    .lean();
-};
