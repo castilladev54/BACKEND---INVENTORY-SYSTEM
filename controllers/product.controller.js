@@ -68,7 +68,7 @@ export const createProduct = async (req, res) => {
       req.userId,
       product._id,
       initialStock,
-      'Ajuste Manual',
+      'initial_count',
       'Stock de apertura al crear el producto',
       session  // <-- sesión compartida, el servicio NO confirmará por su cuenta
     );
