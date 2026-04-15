@@ -1,5 +1,5 @@
 import { invalidateCache, getOrSetCache } from '../lib/redis.js';
-import { createPurchaseProcess, fetchPurchases, fetchPurchaseById, registerPayment } from '../services/purchase.service.js';
+import { createPurchaseProcess, fetchPurchases, fetchPurchaseById, registerPayment, fetchPayments } from '../services/purchase.service.js';
 
 export const createPurchase = async (req, res) => {
   try {
@@ -109,5 +109,14 @@ export const payPurchase = async (req, res) => {
   } catch (error) {
     const status = error.message.includes("encontrada") ? 404 : 400;
     res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+export const getPayments = async (req, res) => {
+  try {
+    const payments = await fetchPayments(req.userId);
+    res.status(200).json({ success: true, payments });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };

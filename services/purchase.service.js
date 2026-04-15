@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { Purchase } from '../models/Purchase.js';
 import { PurchaseDetail } from '../models/PurchaseDetail.js';
 import { Product } from '../models/Product.js';
-
+import { SupplierPayment } from '../models/SupplierPayment.js';
 export const createPurchaseProcess = async (userId, supplier, items, dueDate = null) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -78,22 +78,55 @@ export const fetchPurchaseById = async (id, userId) => {
   return { purchase, details };
 };
 
+
 export const registerPayment = async (purchaseId, userId, amount) => {
-  const purchase = await Purchase.findOne({ _id: purchaseId, admin_id: userId });
-  if (!purchase) throw new Error("Compra no encontrada.");
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-  if (purchase.status === 'PAID') throw new Error("La compra ya se encuentra pagada completamente.");
+  try {
+    const purchase = await Purchase.findOne({ _id: purchaseId, admin_id: userId }).session(session);
+    if (!purchase) throw new Error("Compra no encontrada.");
 
-  purchase.paid_amount = (purchase.paid_amount || 0) + amount;
+    if (purchase.status === 'PAID') throw new Error("La compra ya se encuentra pagada completamente.");
 
-  if (purchase.paid_amount >= purchase.total_cost) {
-    purchase.status = 'PAID';
-    purchase.paid_amount = purchase.total_cost; // Si se abona de más, nivelar.
-    purchase.payment_date = new Date();
-  } else {
-    purchase.status = 'PARTIAL';
+    purchase.paid_amount = (purchase.paid_amount || 0) + amount;
+
+    let actualAmountPaid = amount;
+    if (purchase.paid_amount >= purchase.total_cost) {
+      purchase.status = 'PAID';
+      // Solo registramos como pago lo que faltaba por pagar si se abona de más
+      actualAmountPaid = amount - (purchase.paid_amount - purchase.total_cost);
+      purchase.paid_amount = purchase.total_cost;
+      purchase.payment_date = new Date();
+    } else {
+      purchase.status = 'PARTIAL';
+    }
+
+    await purchase.save({ session });
+
+    // Registrar el abono individual en la base de datos con su propia fecha
+    if (actualAmountPaid > 0) {
+      const payment = new SupplierPayment({
+        purchase_id: purchase._id,
+        admin_id: userId,
+        amount: actualAmountPaid
+      });
+      await payment.save({ session });
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+    return purchase;
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    throw error;
   }
+};
 
-  await purchase.save();
-  return purchase;
+export const fetchPayments = async (userId) => {
+  return SupplierPayment.find({ admin_id: userId })
+    .populate('purchase_id', 'supplier')
+    .sort({ date: -1 })
+    .lean();
 };
