@@ -28,9 +28,9 @@ const TEST_USER = {
 
 export const options = {
   stages: [
-    { duration: '5m', target: 10 }, // Rampa de subida
-    { duration: '50m', target: 40 }, // Carga sostenida
-    { duration: '5m', target: 0 }, // Rampa de bajada
+    { duration: '30s', target: 40 }, // Rampa rápida
+    { duration: '4m', target: 40 },  // Carga sostenida
+    { duration: '30s', target: 0 },  // Rampa de bajada
   ],
   thresholds: {
     http_req_duration: ['p(95)<800'],

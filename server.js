@@ -16,6 +16,7 @@ import { globalLimiter, authLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { verifyToken } from "./middleware/verifyToken.js";
 import { checkSubscription } from "./middleware/checkSubscription.js";
+import { slaTimeout } from "./middleware/sla.middleware.js";
 
 // Rutas
 import authRoutes from "./routes/auth.route.js";
@@ -37,7 +38,10 @@ app.set('trust proxy', 1);
 // Un health check no debe bloquearse por IP ni esperar a la base de datos para responder.
 app.get("/api/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
 
-// 1. SEGURIDAD (Filtros de entrada)
+// 1. SLA TIMEOUT (Fail Fast: corta cualquier request que exceda 1.5s)
+app.use(slaTimeout);
+
+// 2. SEGURIDAD (Filtros de entrada)
 app.use(helmet());
 app.use(hpp());
 app.use(sanitizeNoSQL);
