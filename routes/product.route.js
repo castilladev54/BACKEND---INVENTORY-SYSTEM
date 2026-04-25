@@ -15,7 +15,7 @@ const router = express.Router();
 
 // Rutas para Productos
 router.post('/', validate(createProductSchema), createProduct);
-router.get('/', cacheMiddleware('products', 'products'), getProducts);
+router.get('/', getProducts); // Caché manejada internamente con versionado
 router.get('/barcode/:code', validate(barcodeParamSchema), cacheMiddleware('barcode', 'product', 'code'), getProductByBarcode);
 router.get('/:id', validate(productIdSchema), cacheMiddleware('product', 'product', 'id'), getProductById);
 router.put('/:id', validate(updateProductSchema), updateProduct);

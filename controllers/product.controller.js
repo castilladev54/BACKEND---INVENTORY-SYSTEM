@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { Product } from '../models/Product.js';
 import { Category } from '../models/Category.js';
-import { invalidateCache, getOrSetCache } from '../lib/redis.js';
+import { invalidateCache, getOrSetCache, getCacheVersion, bumpCacheVersion, buildPaginatedKey } from '../lib/redis.js';
 import { createAdjustmentProcess } from '../services/adjustment.service.js';
 
 export const createProduct = async (req, res) => {
@@ -42,7 +42,7 @@ export const createProduct = async (req, res) => {
         user: req.userId
       });
       await product.save();
-      await invalidateCache(`products:${req.userId}`);
+      await bumpCacheVersion('products', req.userId);
       return res.status(201).json({ success: true, product });
     } catch (error) {
       return res.status(500).json({ success: false, message: error.message });
@@ -77,7 +77,7 @@ export const createProduct = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    await invalidateCache(`products:${req.userId}`);
+    await bumpCacheVersion('products', req.userId);
 
     return res.status(201).json({
       success: true,
@@ -95,11 +95,57 @@ export const createProduct = async (req, res) => {
 
 export const getProducts = async (req, res) => {
   try {
-    const cacheKey = `products:${req.userId}`;
-    const { data: products, fromCache } = await getOrSetCache(cacheKey, () =>
-      Product.find({ user: req.userId }).populate('category', 'name').lean()
-    );
-    res.status(200).json({ success: true, products, fromCache });
+    // ─── Parámetros de paginación con defaults seguros ────────────────
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    // ─── Cache key versionada (invalida en bloque al crear/editar/borrar) ─
+    const version = await getCacheVersion('products', req.userId);
+    const cacheKey = buildPaginatedKey('products', version, page, limit, req.userId);
+
+    const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
+      const filter = { user: req.userId };
+
+      // ─── Promise.all: find + count corren en PARALELO ────────────────
+      const [products, total] = await Promise.all([
+        Product.find(filter)
+          .populate('category', 'name')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Product.countDocuments(filter)
+      ]);
+
+      return {
+        products,
+        total,
+        totalPages: Math.ceil(total / limit),
+        currentPage: page
+      };
+    }, 300); // TTL 5 min: los productos cambian con frecuencia
+
+    // Protección: si la página pedida no existe, devolver vacío sin error
+    if (data.currentPage > data.totalPages && data.totalPages > 0) {
+      return res.status(200).json({
+        success: true,
+        products: [],
+        total: data.total,
+        totalPages: data.totalPages,
+        currentPage: page,
+        fromCache
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      products: data.products,
+      total: data.total,
+      totalPages: data.totalPages,
+      currentPage: data.currentPage,
+      fromCache
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -201,11 +247,14 @@ export const updateProduct = async (req, res) => {
         return res.status(404).json({ success: false, message: "Producto no encontrado" });
       }
 
-      // Fix: keys seguras, sin undefined. Invalida barcode viejo y nuevo si cambiaron.
-      const keysToInvalidate = [`products:${req.userId}`, `product:${id}:${req.userId}`];
+      // Invalidar caché paginada (bump de versión) + claves individuales
+      const keysToInvalidate = [`product:${id}:${req.userId}`];
       if (oldBarcode) keysToInvalidate.push(`barcode:${oldBarcode}:${req.userId}`);
       if (barcode && barcode !== oldBarcode) keysToInvalidate.push(`barcode:${barcode}:${req.userId}`);
-      await invalidateCache(...keysToInvalidate);
+      await Promise.all([
+        bumpCacheVersion('products', req.userId),
+        invalidateCache(...keysToInvalidate)
+      ]);
 
       return res.status(200).json({ success: true, product });
     }
@@ -241,16 +290,17 @@ export const updateProduct = async (req, res) => {
       // El ajuste corre en su propia transacción (si falla, lanza error)
       await createAdjustmentProcess(req.userId, id, new_stock, stock_reason, 'Corrección desde edición de producto');
 
-      // Invalidar caché después de todo
-      // Fix: keys seguras, sin undefined. Invalida barcode viejo y nuevo si cambiaron.
+      // Invalidar caché paginada (bump de versión) + claves individuales
       const keysToInvalidate = [
-        `products:${req.userId}`,
         `product:${id}:${req.userId}`,
         `adjustments:${req.userId}`,
       ];
       if (oldBarcode) keysToInvalidate.push(`barcode:${oldBarcode}:${req.userId}`);
       if (barcode && barcode !== oldBarcode) keysToInvalidate.push(`barcode:${barcode}:${req.userId}`);
-      await invalidateCache(...keysToInvalidate);
+      await Promise.all([
+        bumpCacheVersion('products', req.userId),
+        invalidateCache(...keysToInvalidate)
+      ]);
 
       return res.status(200).json({
         success: true,
@@ -283,15 +333,15 @@ export const deleteProduct = async (req, res) => {
       return res.status(404).json({ success: false, message: "Producto no encontrado" });
     }
 
-    // Invalidar caché del listado, producto individual y barcode si existía
-    const keysToInvalidate = [
-      `products:${req.userId}`,
-      `product:${id}:${req.userId}`
-    ];
+    // Invalidar caché paginada (bump de versión) + claves individuales
+    const keysToInvalidate = [`product:${id}:${req.userId}`];
     if (product.barcode) {
       keysToInvalidate.push(`barcode:${product.barcode}:${req.userId}`);
     }
-    await invalidateCache(...keysToInvalidate);
+    await Promise.all([
+      bumpCacheVersion('products', req.userId),
+      invalidateCache(...keysToInvalidate)
+    ]);
 
     res.status(200).json({ success: true, message: "Producto eliminado correctamente" });
   } catch (error) {

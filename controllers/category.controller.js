@@ -1,6 +1,6 @@
 import { Category } from '../models/Category.js';
 import { Product } from '../models/Product.js';
-import { getOrSetCache, invalidateCache } from '../lib/redis.js';
+import { getOrSetCache, invalidateCache, getCacheVersion, bumpCacheVersion, buildPaginatedKey } from '../lib/redis.js';
 
 export const createCategory = async (req, res) => {
   try {
@@ -14,8 +14,7 @@ export const createCategory = async (req, res) => {
     const category = new Category({ name, description, user: req.userId });
     await category.save();
 
-    // Invalidar caché de listado de categorías del usuario
-    await invalidateCache(`categories:${req.userId}`);
+    await bumpCacheVersion('categories', req.userId);
 
     res.status(201).json({ success: true, category });
   } catch (error) {
@@ -25,12 +24,37 @@ export const createCategory = async (req, res) => {
 
 export const getCategories = async (req, res) => {
   try {
-    const cacheKey = `categories:${req.userId}`;
-    const { data: categories, fromCache } = await getOrSetCache(cacheKey, () =>
-      Category.find({ user: req.userId }).lean()
-    );
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
 
-    res.status(200).json({ success: true, categories, fromCache });
+    const version = await getCacheVersion('categories', req.userId);
+    const cacheKey = buildPaginatedKey('categories', version, page, limit, req.userId);
+
+    const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
+      const filter = { user: req.userId };
+
+      const [categories, total] = await Promise.all([
+        Category.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Category.countDocuments(filter)
+      ]);
+
+      return {
+        categories,
+        total,
+        totalPages: Math.ceil(total / limit),
+        currentPage: page
+      };
+    }, 600);
+
+    res.status(200).json({
+      success: true,
+      categories: data.categories,
+      total: data.total,
+      totalPages: data.totalPages,
+      currentPage: data.currentPage,
+      fromCache
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -68,8 +92,10 @@ export const updateCategory = async (req, res) => {
       return res.status(404).json({ success: false, message: "Categoría no encontrada" });
     }
 
-    // Invalidar caché del listado y de esta categoría individual
-    await invalidateCache(`categories:${req.userId}`, `category:${id}:${req.userId}`);
+    await Promise.all([
+      bumpCacheVersion('categories', req.userId),
+      invalidateCache(`category:${id}:${req.userId}`)
+    ]);
 
     res.status(200).json({ success: true, category });
   } catch (error) {
@@ -81,13 +107,11 @@ export const deleteCategory = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Verificar que la categoría pertenece al usuario
         const category = await Category.findOne({ _id: id, user: req.userId });
         if (!category) {
             return res.status(404).json({ success: false, message: "Categoría no encontrada" });
         }
 
-        // Precaución: Verificar si existen productos asociados a esta categoría
         const hasProducts = await Product.findOne({ category: id, user: req.userId });
         if (hasProducts) {
             return res.status(400).json({ 
@@ -98,8 +122,10 @@ export const deleteCategory = async (req, res) => {
 
         await Category.findByIdAndDelete(id);
 
-        // Invalidar caché del listado y de esta categoría individual
-        await invalidateCache(`categories:${req.userId}`, `category:${id}:${req.userId}`);
+        await Promise.all([
+          bumpCacheVersion('categories', req.userId),
+          invalidateCache(`category:${id}:${req.userId}`)
+        ]);
 
         res.status(200).json({ success: true, message: "Categoría eliminada correctamente" });
     } catch (error) {

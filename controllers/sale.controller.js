@@ -1,5 +1,7 @@
-import { invalidateCache, getOrSetCache } from '../lib/redis.js';
-import { createSaleProcess, fetchSales, fetchSaleById } from '../services/sale.service.js';
+import { invalidateCache, getOrSetCache, getCacheVersion, bumpCacheVersion, buildPaginatedKey } from '../lib/redis.js';
+import { Sale } from '../models/Sale.js';
+import { SaleDetail } from '../models/SaleDetail.js';
+import { createSaleProcess, fetchSaleById } from '../services/sale.service.js';
 
 export const createSale = async (req, res) => {
     try {
@@ -7,12 +9,16 @@ export const createSale = async (req, res) => {
 
         const sale = await createSaleProcess(req.userId, items, payment_method);
 
-        // Invalidar caché de ventas y listado listado de cada producto vendido
-        const keysToInvalidate = [`sales:${req.userId}`, `products:${req.userId}`];
+        // Invalidar caché paginada de ventas y productos
+        const keysToInvalidate = [];
         for (const item of items) {
             keysToInvalidate.push(`product:${item.product_id}:${req.userId}`);
         }
-        await invalidateCache(...keysToInvalidate);
+        await Promise.all([
+          bumpCacheVersion('sales', req.userId),
+          bumpCacheVersion('products', req.userId),
+          keysToInvalidate.length > 0 ? invalidateCache(...keysToInvalidate) : Promise.resolve()
+        ]);
 
         res.status(201).json({ 
             success: true, 
@@ -21,7 +27,6 @@ export const createSale = async (req, res) => {
         });
 
     } catch (error) {
-        // Mapeo explícito por tipo de error de negocio:
         let status = 500;
         if (error.message.includes('Stock insuficiente')) status = 400;
         else if (error.message.includes('no encontrado'))  status = 404;
@@ -31,12 +36,42 @@ export const createSale = async (req, res) => {
 
 export const getSales = async (req, res) => {
     try {
-        const { data: sales, fromCache } = await getOrSetCache(
-          `sales:${req.userId}`,
-          () => fetchSales(req.userId),
-          120 // 2 minutos: las ventas cambian con mucha frecuencia
-        );
-        res.status(200).json({ success: true, sales, fromCache });
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+        const skip = (page - 1) * limit;
+
+        const version = await getCacheVersion('sales', req.userId);
+        const cacheKey = buildPaginatedKey('sales', version, page, limit, req.userId);
+
+        const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
+            const filter = { customer_id: req.userId };
+
+            const [sales, total] = await Promise.all([
+                Sale.find(filter)
+                    .populate('customer_id', 'name email')
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .lean(),
+                Sale.countDocuments(filter)
+            ]);
+
+            return {
+                sales,
+                total,
+                totalPages: Math.ceil(total / limit),
+                currentPage: page
+            };
+        }, 120);
+
+        res.status(200).json({
+            success: true,
+            sales: data.sales,
+            total: data.total,
+            totalPages: data.totalPages,
+            currentPage: data.currentPage,
+            fromCache
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
