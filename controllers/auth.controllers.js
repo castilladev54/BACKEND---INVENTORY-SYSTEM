@@ -5,6 +5,7 @@ import { Purchase } from "../models/Purchase.js";
 import { PurchaseDetail } from "../models/PurchaseDetail.js";
 import { Sale } from "../models/Sale.js";
 import { SaleDetail } from "../models/SaleDetail.js";
+import mongoose from "mongoose";
 import crypto from "crypto";
 import bcryptjs from "bcryptjs";
 import { generateTokenAndSetCookie } from "../utils/generateTokenAndSetCookie.js";
@@ -181,9 +182,14 @@ export const checkAuth = async (req, res) => {
 };
 
 export const purgeUserAndData = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const adminUser = await User.findById(req.userId);
+    const adminUser = await User.findById(req.userId).session(session);
     if (!adminUser || adminUser.role !== 'admin') {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(403).json({ success: false, message: "Sólo administradores pueden purgar cuentas." });
     }
 
@@ -191,31 +197,39 @@ export const purgeUserAndData = async (req, res) => {
 
     // Evitar auto-eliminación por seguridad
     if (adminUser._id.toString() === targetUserId) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ success: false, message: "No puedes eliminar tu propia cuenta." });
     }
 
-    // 1. Eliminar datos transaccionales en Cascada
-    const userPurchases = await Purchase.find({ admin_id: targetUserId });
+    // 1. Eliminar datos transaccionales en Cascada (ACID: todo o nada)
+    const userPurchases = await Purchase.find({ admin_id: targetUserId }).session(session);
     const purchaseIds = userPurchases.map(p => p._id);
-    await PurchaseDetail.deleteMany({ purchase_id: { $in: purchaseIds } });
-    await Purchase.deleteMany({ admin_id: targetUserId });
+    await PurchaseDetail.deleteMany({ purchase_id: { $in: purchaseIds } }).session(session);
+    await Purchase.deleteMany({ admin_id: targetUserId }).session(session);
 
-    const userSales = await Sale.find({ customer_id: targetUserId });
+    const userSales = await Sale.find({ customer_id: targetUserId }).session(session);
     const saleIds = userSales.map(s => s._id);
-    await SaleDetail.deleteMany({ sale_id: { $in: saleIds } });
-    await Sale.deleteMany({ customer_id: targetUserId });
+    await SaleDetail.deleteMany({ sale_id: { $in: saleIds } }).session(session);
+    await Sale.deleteMany({ customer_id: targetUserId }).session(session);
 
     // 2. Eliminar Catálogo del usuario
-    await Product.deleteMany({ user: targetUserId });
-    await Category.deleteMany({ user: targetUserId });
+    await Product.deleteMany({ user: targetUserId }).session(session);
+    await Category.deleteMany({ user: targetUserId }).session(session);
 
-    // 3. Eliminar Usuario
-    const deletedUser = await User.findByIdAndDelete(targetUserId);
+    // 3. Eliminar Usuario (si no existe, abort y 404)
+    const deletedUser = await User.findByIdAndDelete(targetUserId).session(session);
     if (!deletedUser) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ success: false, message: "Usuario no encontrado." });
     }
 
-    // 4. Invalidar todo el caché del usuario purgado
+    // 4. Confirmar todo en un único commit atómico
+    await session.commitTransaction();
+    session.endSession();
+
+    // 5. Invalidar caché del usuario purgado (fuera de la transacción — Redis no es transaccional)
     await invalidateCache(
       `categories:${targetUserId}`,
       `products:${targetUserId}`,
@@ -225,7 +239,9 @@ export const purgeUserAndData = async (req, res) => {
 
     res.status(200).json({ success: true, message: "El usuario y todos sus registros han sido purgados exitosamente de la base de datos." });
   } catch (error) {
-    console.log("Error in purgeUserAndData ", error);
+    if (session.inTransaction()) await session.abortTransaction();
+    session.endSession();
+    console.error("Error in purgeUserAndData ", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

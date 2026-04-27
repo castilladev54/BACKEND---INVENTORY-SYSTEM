@@ -259,15 +259,15 @@ export const updateProduct = async (req, res) => {
       return res.status(200).json({ success: true, product });
     }
 
-    // ── 4b. CON corrección de stock → transacción ACID ────────────────────────
-    // Usamos createAdjustmentProcess que ya encapsula la transacción.
-    // PERO necesitamos también actualizar los campos de metadata del producto
-    // dentro de la MISMA sesión. Lo hacemos con una sesión compartida manualmente.
+    // ── 4b. CON corrección de stock → transacción ACID única ─────────────────
+    // Pasamos la sesión al servicio de ajuste para que metadata + stock + Kardex
+    // se confirmen en UN SOLO commit atómico, eliminando la ventana de
+    // inconsistencia que existía al hacer commitTransaction antes del ajuste.
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // 4b.1 Actualizar campos de metadata dentro de la sesión
+      // 4b.1 Actualizar campos de metadata del producto (comparte sesión)
       const product = await Product.findOneAndUpdate(
         { _id: id, user: req.userId },
         updateData,
@@ -280,15 +280,14 @@ export const updateProduct = async (req, res) => {
         return res.status(404).json({ success: false, message: "Producto no encontrado" });
       }
 
-      // 4b.2 Crear el ajuste de inventario silenciosamente usando el servicio existente.
-      // NOTA: createAdjustmentProcess gestiona su propia sesión internamente.
-      // La llamamos FUERA de la sesión actual para evitar sesiones anidadas
-      // (MongoDB no las soporta). Si el ajuste falla, abortamos la actualización.
+      // 4b.2 Ajuste de stock + registro en Kardex dentro de la MISMA sesión.
+      // createAdjustmentProcess detecta extSession != null y NO hace commit propio.
+      // Ambas operaciones (metadata + ajuste) se confirman juntas al final.
+      await createAdjustmentProcess(req.userId, id, new_stock, stock_reason, 'Corrección desde edición de producto', session);
+
+      // 4b.3 Commit único: metadata + stock + Kardex son atómicos
       await session.commitTransaction();
       session.endSession();
-
-      // El ajuste corre en su propia transacción (si falla, lanza error)
-      await createAdjustmentProcess(req.userId, id, new_stock, stock_reason, 'Corrección desde edición de producto');
 
       // Invalidar caché paginada (bump de versión) + claves individuales
       const keysToInvalidate = [

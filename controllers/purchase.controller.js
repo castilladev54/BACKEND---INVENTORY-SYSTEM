@@ -1,4 +1,4 @@
-import { invalidateCache, getOrSetCache } from '../lib/redis.js';
+import { invalidateCache, getOrSetCache, bumpCacheVersion } from '../lib/redis.js';
 import { createPurchaseProcess, fetchPurchases, fetchPurchaseById, registerPayment, fetchPayments } from '../services/purchase.service.js';
 
 export const createPurchase = async (req, res) => {
@@ -7,12 +7,19 @@ export const createPurchase = async (req, res) => {
 
     const purchase = await createPurchaseProcess(req.userId, supplier, items, dueDate);
 
-    // Invalidar caché de compras y productos detallados
-    const keysToInvalidate = [`purchases:${req.userId}`, `products:${req.userId}`];
+    // Invalidar caché de compras y productos usando el sistema versionado
+    // (coherente con el patrón de ventas y productos — invalida en bloque sin SCAN)
+    const individualKeysToInvalidate = [];
     for (const item of items) {
-       keysToInvalidate.push(`product:${item.product_id}:${req.userId}`);
+      individualKeysToInvalidate.push(`product:${item.product_id}:${req.userId}`);
     }
-    await invalidateCache(...keysToInvalidate);
+    await Promise.all([
+      bumpCacheVersion('purchases', req.userId),
+      bumpCacheVersion('products', req.userId),
+      individualKeysToInvalidate.length > 0
+        ? invalidateCache(...individualKeysToInvalidate)
+        : Promise.resolve()
+    ]);
 
     res.status(201).json({
       success: true,
@@ -97,9 +104,12 @@ export const payPurchase = async (req, res) => {
 
     const purchase = await registerPayment(id, req.userId, amount);
 
-    // Invalidar caché general de compras para asegurar que la lista refleje el pago
-    // También invalidar el caché individual de la compra actual
-    await invalidateCache(`purchases:${req.userId}`, `purchase:${id}:${req.userId}`);
+    // Invalidar caché de compras con el sistema versionado para que la lista refleje el pago
+    // También eliminar la clave individual de esta compra
+    await Promise.all([
+      bumpCacheVersion('purchases', req.userId),
+      invalidateCache(`purchase:${id}:${req.userId}`)
+    ]);
 
     res.status(200).json({
       success: true,
