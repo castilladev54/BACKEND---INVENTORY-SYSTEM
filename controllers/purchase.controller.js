@@ -1,5 +1,5 @@
-import { invalidateCache, getOrSetCache, bumpCacheVersion } from '../lib/redis.js';
-import { createPurchaseProcess, fetchPurchases, fetchPurchaseById, registerPayment, fetchPayments } from '../services/purchase.service.js';
+import { invalidateCache, getOrSetCache, bumpCacheVersion, getCacheVersion, buildPaginatedKey } from '../lib/redis.js';
+import { createPurchaseProcess, fetchPurchases, fetchPurchasesCount, fetchPurchaseById, registerPayment, fetchPayments } from '../services/purchase.service.js';
 
 export const createPurchase = async (req, res) => {
   try {
@@ -35,6 +35,11 @@ export const createPurchase = async (req, res) => {
 
 export const getPurchases = async (req, res) => {
   try {
+    // ─── Paginación con defaults seguros ────────────────────────────────
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip  = (page - 1) * limit;
+
     const { status, filterBy } = req.query;
     const filters = {};
 
@@ -44,31 +49,70 @@ export const getPurchases = async (req, res) => {
     today.setHours(0, 0, 0, 0);
 
     if (filterBy === 'expiringSoon') {
-        const nextWeek = new Date(today);
-        nextWeek.setDate(today.getDate() + 7);
-        filters.status = { $ne: 'PAID' };
-        filters.due_date = { $gte: today, $lte: nextWeek };
+      const nextWeek = new Date(today);
+      nextWeek.setDate(today.getDate() + 7);
+      filters.status   = { $ne: 'PAID' };
+      filters.due_date = { $gte: today, $lte: nextWeek };
     } else if (filterBy === 'overdue') {
-        filters.status = { $ne: 'PAID' };
-        filters.due_date = { $lt: today };
+      filters.status   = { $ne: 'PAID' };
+      filters.due_date = { $lt: today };
     }
 
-    // Solo cacheamos la consulta sin filtros.
-    // Las consultas filtradas van directo a MongoDB para evitar explotar las keys de caché
-    // (no podemos invalidar por patrón en Upstash Redis).
     const hasFilters = status || filterBy;
 
-    if (!hasFilters) {
-      const { data: purchases, fromCache } = await getOrSetCache(
-        `purchases:${req.userId}`,
-        () => fetchPurchases(req.userId, {}),
-        120 // 2 minutos: las compras cambian con frecuencia
-      );
-      return res.status(200).json({ success: true, purchases, fromCache });
+    // ─── Consultas filtradas: van directo a MongoDB (no cacheables por patrón) ─
+    // No podemos invalidar por patrón en Upstash REST → consultamos directo
+    if (hasFilters) {
+      const [purchases, total] = await Promise.all([
+        fetchPurchases(req.userId, filters, skip, limit),
+        fetchPurchasesCount(req.userId, filters)
+      ]);
+      return res.status(200).json({
+        success: true,
+        purchases,
+        total,
+        totalPages: Math.ceil(total / limit),
+        currentPage: page
+      });
     }
 
-    const purchases = await fetchPurchases(req.userId, filters);
-    res.status(200).json({ success: true, purchases });
+    // ─── Consulta sin filtros: caché versionada ──────────────────────────
+    const version  = await getCacheVersion('purchases', req.userId);
+    const cacheKey = buildPaginatedKey('purchases', version, page, limit, req.userId);
+
+    const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
+      const [purchases, total] = await Promise.all([
+        fetchPurchases(req.userId, {}, skip, limit),
+        fetchPurchasesCount(req.userId, {})
+      ]);
+      return {
+        purchases,
+        total,
+        totalPages: Math.ceil(total / limit),
+        currentPage: page
+      };
+    }, 120); // TTL 2 min
+
+    // Protección: página fuera de rango
+    if (data.currentPage > data.totalPages && data.totalPages > 0) {
+      return res.status(200).json({
+        success: true,
+        purchases: [],
+        total: data.total,
+        totalPages: data.totalPages,
+        currentPage: page,
+        fromCache
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      purchases: data.purchases,
+      total: data.total,
+      totalPages: data.totalPages,
+      currentPage: data.currentPage,
+      fromCache
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

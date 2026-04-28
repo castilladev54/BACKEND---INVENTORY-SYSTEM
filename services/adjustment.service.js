@@ -68,9 +68,18 @@ export const createAdjustmentProcess = async (userId, product_id, new_stock, rea
   }
 };
 
-export const fetchAdjustments = async (userId) => {
-  return InventoryAdjustment.find({ user_id: userId })
+export const fetchAdjustments = async (userId, skip = 0, limit = 0) => {
+  const query = InventoryAdjustment.find({ user_id: userId })
     .populate('product_id', 'name barcode price')
     .sort({ createdAt: -1 })
-    .lean();
+    .skip(skip);
+
+  // limit=0 significa "sin límite" (uso interno: kardex completo en product.controller)
+  if (limit > 0) query.limit(limit);
+
+  return query.lean();
+};
+
+export const fetchAdjustmentsCount = async (userId) => {
+  return InventoryAdjustment.countDocuments({ user_id: userId });
 };

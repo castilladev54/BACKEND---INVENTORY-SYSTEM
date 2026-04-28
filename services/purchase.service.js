@@ -56,12 +56,20 @@ export const createPurchaseProcess = async (userId, supplier, items, dueDate = n
   }
 };
 
-export const fetchPurchases = async (userId, filters = {}) => {
-  const query = { admin_id: userId, ...filters };
-  return Purchase.find(query)
+export const fetchPurchases = async (userId, filters = {}, skip = 0, limit = 0) => {
+  const query = Purchase.find({ admin_id: userId, ...filters })
     .populate('admin_id', 'name email')
     .sort({ createdAt: -1 })
-    .lean();
+    .skip(skip);
+
+  // limit=0 → sin límite (compatibilidad con llamadas internas)
+  if (limit > 0) query.limit(limit);
+
+  return query.lean();
+};
+
+export const fetchPurchasesCount = async (userId, filters = {}) => {
+  return Purchase.countDocuments({ admin_id: userId, ...filters });
 };
 
 export const fetchPurchaseById = async (id, userId) => {
