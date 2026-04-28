@@ -18,9 +18,17 @@ vi.mock('../mailtrap/emails.js', () => ({
 
 // Mock Redis: evita llamadas HTTP reales a Upstash en CI/CD
 vi.mock('../lib/redis.js', () => ({
-  redis: {},
-  getOrSetCache: vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
-  invalidateCache: vi.fn(async () => {}),
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => 'OK'),
+    del: vi.fn(async () => 1),
+    incr: vi.fn(async () => 1),
+  },
+  getOrSetCache:    vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
+  invalidateCache:  vi.fn(async () => {}),
+  bumpCacheVersion: vi.fn(async () => {}),
+  getCacheVersion:  vi.fn(async () => 0),
+  buildPaginatedKey: vi.fn((_p, _v, _pg, _l, uid) => `mock:${uid}`),
 }));
 
 let mongoServer;

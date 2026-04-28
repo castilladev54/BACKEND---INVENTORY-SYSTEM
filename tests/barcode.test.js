@@ -19,9 +19,13 @@ vi.mock('../lib/redis.js', () => ({
     get: vi.fn(async () => null),   // MISS de caché → pasa al controlador
     set: vi.fn(async () => 'OK'),
     del: vi.fn(async () => 1),
+    incr: vi.fn(async () => 1),
   },
-  getOrSetCache: vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
-  invalidateCache: vi.fn(async () => {}),
+  getOrSetCache:    vi.fn(async (_key, fn) => ({ data: await fn(), fromCache: false })),
+  invalidateCache:  vi.fn(async () => {}),
+  bumpCacheVersion: vi.fn(async () => {}),
+  getCacheVersion:  vi.fn(async () => 0),
+  buildPaginatedKey: vi.fn((_p, _v, _pg, _l, uid) => `mock:${uid}`),
 }));
 
 let mongoServer;
