@@ -8,15 +8,14 @@ import {
 } from '../controllers/purchase.controller.js';
 import { validate } from '../middleware/validate.js';
 import { createPurchaseSchema, purchaseIdSchema } from '../validations/purchase.validation.js';
-import { cacheMiddleware } from '../middleware/cache.middleware.js';
 
 const router = express.Router();
 
 // Rutas para Compras (Purchases)
 router.post('/', validate(createPurchaseSchema), createPurchase);
-router.get('/', cacheMiddleware('purchases', 'purchases'), getPurchases);
-router.get('/payments', getPayments); // Antes de /:id para evitar choques
-router.get('/:id', validate(purchaseIdSchema), cacheMiddleware('purchase', 'purchase', 'id'), getPurchaseById);
+router.get('/', getPurchases);
+router.get('/payments', getPayments);
+router.get('/:id', validate(purchaseIdSchema), getPurchaseById);
 router.put('/:id/pay', validate(purchaseIdSchema), payPurchase);
 
 export default router;
