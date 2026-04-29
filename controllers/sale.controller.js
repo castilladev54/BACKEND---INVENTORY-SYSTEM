@@ -3,6 +3,7 @@ import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
 import { createSaleProcess, fetchSaleById } from '../services/sale.service.js';
 
+
 export const createSale = async (req, res) => {
     try {
         const { items, payment_method } = req.body;
@@ -80,7 +81,11 @@ export const getSales = async (req, res) => {
 export const getSaleById = async (req, res) => {
     try {
         const { id } = req.params;
-        const data = await fetchSaleById(id, req.userId);
+        const cacheKey = `sale:${id}:${req.userId}`;
+
+        const { data, fromCache } = await getOrSetCache(cacheKey, () =>
+            fetchSaleById(id, req.userId),
+        300); // TTL 5 min
 
         if (!data) {
             return res.status(404).json({ success: false, message: "Venta no encontrada" });
@@ -88,7 +93,8 @@ export const getSaleById = async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            sale: data
+            sale: data,
+            fromCache
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
