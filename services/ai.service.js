@@ -124,52 +124,73 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
 
 // ─── SERVICIO PRINCIPAL ───────────────────────────────────────────────
 export const getAIAdviceStreamService = async (userId, userQuestion) => {
-    // 1. Recopilar contexto BASE (datos del día — siempre se envían)
     const today = getTodayVE();
     const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const nextWeek = new Date(today);
+    nextWeek.setDate(nextWeek.getDate() + 7);
 
-    // Stock crítico
-    const criticalStock = await Product.find({ user: userId, stock: { $lt: 5 } })
-        .select('_id name stock price')
-        .limit(10)
-        .lean();
+    // ─── Todas las consultas en PARALELO (evita timeout) ──────────────
+    const withTimeout = (promise, ms = 8000) =>
+        Promise.race([
+            promise,
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('DB query timeout')), ms)
+            )
+        ]);
 
-    // Ventas de hoy (Balance Ingresos)
-    const salesToday = await Sale.find({ customer_id: userId, createdAt: { $gte: today } }).lean();
-    const incomeToday = salesToday.reduce((acc, sale) => acc + sale.total_amount, 0);
+    const [
+        criticalStock,
+        salesToday,
+        purchasesToday,
+        pendingPurchases,
+        monthlySaleIds,
+    ] = await withTimeout(Promise.all([
+        Product.find({ user: userId, stock: { $lt: 5 } })
+            .select('_id name stock price').limit(10).lean(),
+        Sale.find({ customer_id: userId, createdAt: { $gte: today } }).lean(),
+        Purchase.find({ admin_id: userId, createdAt: { $gte: today } }).lean(),
+        Purchase.find({ admin_id: userId, status: { $ne: 'PAID' } }).lean(),
+        Sale.find({ customer_id: userId, createdAt: { $gte: firstDayOfMonth } })
+            .select('_id').lean(),
+    ]));
 
-    // Extraer detalle de ventas de hoy (simplificado para ahorrar tokens)
-    const salesTodayIds = salesToday.map(s => s._id);
-    const salesDetailsRaw = await SaleDetail.find({ sale_id: { $in: salesTodayIds } })
-        .populate('product_id', 'name')
-        .lean();
+    // Consultas que dependen de resultados anteriores — segunda ronda paralela
+    const salesTodayIds  = salesToday.map(s => s._id);
+    const monthlySaleIdsArr = monthlySaleIds.map(m => m._id);
+
+    const [salesDetailsRaw, topProductsRaw] = await withTimeout(Promise.all([
+        salesTodayIds.length > 0
+            ? SaleDetail.find({ sale_id: { $in: salesTodayIds } })
+                .populate('product_id', 'name').lean()
+            : Promise.resolve([]),
+        monthlySaleIdsArr.length > 0
+            ? SaleDetail.aggregate([
+                { $match: { sale_id: { $in: monthlySaleIdsArr } } },
+                { $group: { _id: '$product_id', totalSold: { $sum: '$quantity' } } },
+                { $sort: { totalSold: -1 } },
+                { $limit: 5 },
+                { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'productInfo' } },
+                { $unwind: '$productInfo' },
+                { $project: { _id: 0, name: '$productInfo.name', totalSold: 1 } }
+            ])
+            : Promise.resolve([]),
+    ]));
+
+    // ─── Calcular métricas ────────────────────────────────────────────
+    const incomeToday  = salesToday.reduce((acc, s) => acc + s.total_amount, 0);
+    const expenseToday = purchasesToday.reduce((acc, p) => acc + p.total_cost, 0);
 
     // Agrupar ventas de hoy por producto
     const ventasHoyResumen = {};
     for (const detail of salesDetailsRaw) {
         if (!detail.product_id) continue;
-        const rootName = detail.product_id.name;
-        if (!ventasHoyResumen[rootName]) {
-            ventasHoyResumen[rootName] = 0;
-        }
-        ventasHoyResumen[rootName] += (detail.quantity * detail.unit_price);
+        const name = detail.product_id.name;
+        ventasHoyResumen[name] = (ventasHoyResumen[name] || 0) + (detail.quantity * detail.unit_price);
     }
-    const ventas_hoy = Object.keys(ventasHoyResumen).map(name => ({
-        producto: name,
-        monto_total: ventasHoyResumen[name]
-    }));
+    const ventas_hoy = Object.entries(ventasHoyResumen).map(([producto, monto_total]) => ({ producto, monto_total }));
 
-    // Gastos de hoy (Balance Egresos)
-    const purchasesToday = await Purchase.find({ admin_id: userId, createdAt: { $gte: today } }).lean();
-    const expenseToday = purchasesToday.reduce((acc, purchase) => acc + purchase.total_cost, 0);
-
-    // Cuentas por Pagar (Facturas pendientes / vencidas)
-    const nextWeek = new Date(today);
-    nextWeek.setDate(nextWeek.getDate() + 7);
-    
-    const pendingPurchases = await Purchase.find({ admin_id: userId, status: { $ne: 'PAID' } }).lean();
-    
-    const cuentas_por_pagar = { 
+    // Cuentas por pagar
+    const cuentas_por_pagar = {
         vencidas: 0, monto_vencido: 0,
         por_vencer: 0, monto_por_vencer: 0,
         total_deuda_global: 0
@@ -182,34 +203,13 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
         if (p.due_date < today) {
             cuentas_por_pagar.vencidas++;
             cuentas_por_pagar.monto_vencido += remaining;
-            recordatorios_pago.push(`VENCIDA: Proveedor ${p.supplier}, se le debe $${remaining}`);
+            recordatorios_pago.push(`VENCIDA: Proveedor ${p.supplier}, se le debe $${remaining.toFixed(2)}`);
         } else if (p.due_date <= nextWeek) {
             cuentas_por_pagar.por_vencer++;
             cuentas_por_pagar.monto_por_vencer += remaining;
-            recordatorios_pago.push(`POR VENCER (en menos de 7 días): Proveedor ${p.supplier}, se le debe $${remaining}`);
+            recordatorios_pago.push(`POR VENCER (en menos de 7 días): Proveedor ${p.supplier}, se le debe $${remaining.toFixed(2)}`);
         }
     });
-
-    // Top 5 Productos del Mes
-    const monthlySales = await Sale.find({ customer_id: userId, createdAt: { $gte: firstDayOfMonth } }).select('_id').lean();
-    const monthlySaleIds = monthlySales.map(m => m._id);
-
-    const topProductsRaw = await SaleDetail.aggregate([
-        { $match: { sale_id: { $in: monthlySaleIds } } },
-        { $group: { _id: "$product_id", totalSold: { $sum: "$quantity" } } },
-        { $sort: { totalSold: -1 } },
-        { $limit: 5 },
-        {
-            $lookup: {
-                from: "products",
-                localField: "_id",
-                foreignField: "_id",
-                as: "productInfo"
-            }
-        },
-        { $unwind: "$productInfo" },
-        { $project: { _id: 0, name: "$productInfo.name", totalSold: 1 } }
-    ]);
 
     // ─── PASO 3: Inyección Condicional de Contexto Temporal ───────────
     const contextData = {
@@ -222,14 +222,15 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
 
     const temporalIntent = detectTemporalIntent(userQuestion);
     if (temporalIntent) {
-        const temporalData = await fetchTemporalContext(userId, temporalIntent.days, temporalIntent.label);
+        const temporalData = await withTimeout(
+            fetchTemporalContext(userId, temporalIntent.days, temporalIntent.label)
+        );
         contextData.contexto_temporal = temporalData;
     }
 
     // ─── Inyección Condicional: Desglose de Deudas por Proveedor ──────
     const debtIntent = detectDebtIntent(userQuestion);
     if (debtIntent && pendingPurchases.length > 0) {
-        // Agrupar deudas por proveedor
         const deudaPorProveedor = {};
         pendingPurchases.forEach(p => {
             const remaining = p.total_cost - (p.paid_amount || 0);
