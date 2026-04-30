@@ -4,6 +4,7 @@ import { Product } from '../models/Product.js';
 import { Sale } from '../models/Sale.js';
 import { Purchase } from '../models/Purchase.js';
 import { SaleDetail } from '../models/SaleDetail.js';
+import { getOrSetCache } from '../lib/redis.js';
 
 // ─── PASO 1: Detector de Intención Temporal (Regex, sin IA) ───────────
 const TEMPORAL_PATTERNS = [
@@ -124,101 +125,118 @@ const fetchTemporalContext = async (userId, daysBack, label) => {
 
 // ─── SERVICIO PRINCIPAL ───────────────────────────────────────────────
 export const getAIAdviceStreamService = async (userId, userQuestion) => {
+    const cacheKey = `ai_base_context:${userId}`;
+    const { data: baseContext } = await getOrSetCache(cacheKey, async () => {
+        const today = getTodayVE();
+        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        const nextWeek = new Date(today);
+        nextWeek.setDate(nextWeek.getDate() + 7);
+
+        // ─── Todas las consultas en PARALELO (evita timeout) ──────────────
+        const withTimeout = (promise, ms = 8000) =>
+            Promise.race([
+                promise,
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('DB query timeout')), ms)
+                )
+            ]);
+
+        const [
+            criticalStock,
+            salesToday,
+            purchasesToday,
+            pendingPurchases,
+            monthlySaleIds,
+        ] = await withTimeout(Promise.all([
+            Product.find({ user: userId, stock: { $lt: 5 } })
+                .select('_id name stock price').limit(10).lean(),
+            Sale.find({ customer_id: userId, createdAt: { $gte: today } }).lean(),
+            Purchase.find({ admin_id: userId, createdAt: { $gte: today } }).lean(),
+            Purchase.find({ admin_id: userId, status: { $ne: 'PAID' } }).lean(),
+            Sale.find({ customer_id: userId, createdAt: { $gte: firstDayOfMonth } })
+                .select('_id').lean(),
+        ]));
+
+        // Consultas que dependen de resultados anteriores — segunda ronda paralela
+        const salesTodayIds  = salesToday.map(s => s._id);
+        const monthlySaleIdsArr = monthlySaleIds.map(m => m._id);
+
+        const [salesDetailsRaw, topProductsRaw] = await withTimeout(Promise.all([
+            salesTodayIds.length > 0
+                ? SaleDetail.find({ sale_id: { $in: salesTodayIds } })
+                    .populate('product_id', 'name').lean()
+                : Promise.resolve([]),
+            monthlySaleIdsArr.length > 0
+                ? SaleDetail.aggregate([
+                    { $match: { sale_id: { $in: monthlySaleIdsArr } } },
+                    { $group: { _id: '$product_id', totalSold: { $sum: '$quantity' } } },
+                    { $sort: { totalSold: -1 } },
+                    { $limit: 5 },
+                    { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'productInfo' } },
+                    { $unwind: '$productInfo' },
+                    { $project: { _id: 0, name: '$productInfo.name', totalSold: 1 } }
+                ])
+                : Promise.resolve([]),
+        ]));
+
+        // ─── Calcular métricas ────────────────────────────────────────────
+        const incomeToday  = salesToday.reduce((acc, s) => acc + s.total_amount, 0);
+        const expenseToday = purchasesToday.reduce((acc, p) => acc + p.total_cost, 0);
+
+        // Agrupar ventas de hoy por producto
+        const ventasHoyResumen = {};
+        for (const detail of salesDetailsRaw) {
+            if (!detail.product_id) continue;
+            const name = detail.product_id.name;
+            ventasHoyResumen[name] = (ventasHoyResumen[name] || 0) + (detail.quantity * detail.unit_price);
+        }
+        const ventas_hoy = Object.entries(ventasHoyResumen).map(([producto, monto_total]) => ({ producto, monto_total }));
+
+        // Cuentas por pagar
+        const cuentas_por_pagar = {
+            vencidas: 0, monto_vencido: 0,
+            por_vencer: 0, monto_por_vencer: 0,
+            total_deuda_global: 0
+        };
+        const recordatorios_pago = [];
+
+        pendingPurchases.forEach(p => {
+            const remaining = p.total_cost - (p.paid_amount || 0);
+            cuentas_por_pagar.total_deuda_global += remaining;
+            if (p.due_date < today) {
+                cuentas_por_pagar.vencidas++;
+                cuentas_por_pagar.monto_vencido += remaining;
+                recordatorios_pago.push(`VENCIDA: Proveedor ${p.supplier}, se le debe $${remaining.toFixed(2)}`);
+            } else if (p.due_date <= nextWeek) {
+                cuentas_por_pagar.por_vencer++;
+                cuentas_por_pagar.monto_por_vencer += remaining;
+                recordatorios_pago.push(`POR VENCER (en menos de 7 días): Proveedor ${p.supplier}, se le debe $${remaining.toFixed(2)}`);
+            }
+        });
+
+        return {
+            ventas_hoy,
+            stock_critico: criticalStock.map(p => ({ nombre: p.name, stock: p.stock })),
+            top_productos: topProductsRaw,
+            balance: { ingresos_hoy: incomeToday, gastos_hoy: expenseToday, ganancia_neta: incomeToday - expenseToday },
+            deudas: { resumen: cuentas_por_pagar, detalles: recordatorios_pago },
+            pendingPurchases // lo pasamos para que el intent de deudas pueda usarlo después
+        };
+    }, 180); // TTL 3 minutos para mantener el chat rápido
+
+    const contextData = {
+        ventas_hoy: baseContext.ventas_hoy,
+        stock_critico: baseContext.stock_critico,
+        top_productos: baseContext.top_productos,
+        balance: baseContext.balance,
+        deudas: baseContext.deudas
+    };
+    
+    // Extraemos pendingPurchases para la Inyección Condicional de Deudas
+    const pendingPurchases = baseContext.pendingPurchases;
     const today = getTodayVE();
-    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
     const nextWeek = new Date(today);
     nextWeek.setDate(nextWeek.getDate() + 7);
-
-    // ─── Todas las consultas en PARALELO (evita timeout) ──────────────
-    const withTimeout = (promise, ms = 8000) =>
-        Promise.race([
-            promise,
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('DB query timeout')), ms)
-            )
-        ]);
-
-    const [
-        criticalStock,
-        salesToday,
-        purchasesToday,
-        pendingPurchases,
-        monthlySaleIds,
-    ] = await withTimeout(Promise.all([
-        Product.find({ user: userId, stock: { $lt: 5 } })
-            .select('_id name stock price').limit(10).lean(),
-        Sale.find({ customer_id: userId, createdAt: { $gte: today } }).lean(),
-        Purchase.find({ admin_id: userId, createdAt: { $gte: today } }).lean(),
-        Purchase.find({ admin_id: userId, status: { $ne: 'PAID' } }).lean(),
-        Sale.find({ customer_id: userId, createdAt: { $gte: firstDayOfMonth } })
-            .select('_id').lean(),
-    ]));
-
-    // Consultas que dependen de resultados anteriores — segunda ronda paralela
-    const salesTodayIds  = salesToday.map(s => s._id);
-    const monthlySaleIdsArr = monthlySaleIds.map(m => m._id);
-
-    const [salesDetailsRaw, topProductsRaw] = await withTimeout(Promise.all([
-        salesTodayIds.length > 0
-            ? SaleDetail.find({ sale_id: { $in: salesTodayIds } })
-                .populate('product_id', 'name').lean()
-            : Promise.resolve([]),
-        monthlySaleIdsArr.length > 0
-            ? SaleDetail.aggregate([
-                { $match: { sale_id: { $in: monthlySaleIdsArr } } },
-                { $group: { _id: '$product_id', totalSold: { $sum: '$quantity' } } },
-                { $sort: { totalSold: -1 } },
-                { $limit: 5 },
-                { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'productInfo' } },
-                { $unwind: '$productInfo' },
-                { $project: { _id: 0, name: '$productInfo.name', totalSold: 1 } }
-            ])
-            : Promise.resolve([]),
-    ]));
-
-    // ─── Calcular métricas ────────────────────────────────────────────
-    const incomeToday  = salesToday.reduce((acc, s) => acc + s.total_amount, 0);
-    const expenseToday = purchasesToday.reduce((acc, p) => acc + p.total_cost, 0);
-
-    // Agrupar ventas de hoy por producto
-    const ventasHoyResumen = {};
-    for (const detail of salesDetailsRaw) {
-        if (!detail.product_id) continue;
-        const name = detail.product_id.name;
-        ventasHoyResumen[name] = (ventasHoyResumen[name] || 0) + (detail.quantity * detail.unit_price);
-    }
-    const ventas_hoy = Object.entries(ventasHoyResumen).map(([producto, monto_total]) => ({ producto, monto_total }));
-
-    // Cuentas por pagar
-    const cuentas_por_pagar = {
-        vencidas: 0, monto_vencido: 0,
-        por_vencer: 0, monto_por_vencer: 0,
-        total_deuda_global: 0
-    };
-    const recordatorios_pago = [];
-
-    pendingPurchases.forEach(p => {
-        const remaining = p.total_cost - (p.paid_amount || 0);
-        cuentas_por_pagar.total_deuda_global += remaining;
-        if (p.due_date < today) {
-            cuentas_por_pagar.vencidas++;
-            cuentas_por_pagar.monto_vencido += remaining;
-            recordatorios_pago.push(`VENCIDA: Proveedor ${p.supplier}, se le debe $${remaining.toFixed(2)}`);
-        } else if (p.due_date <= nextWeek) {
-            cuentas_por_pagar.por_vencer++;
-            cuentas_por_pagar.monto_por_vencer += remaining;
-            recordatorios_pago.push(`POR VENCER (en menos de 7 días): Proveedor ${p.supplier}, se le debe $${remaining.toFixed(2)}`);
-        }
-    });
-
-    // ─── PASO 3: Inyección Condicional de Contexto Temporal ───────────
-    const contextData = {
-        ventas_hoy,
-        stock_critico: criticalStock.map(p => ({ nombre: p.name, stock: p.stock })),
-        top_productos: topProductsRaw,
-        balance: { ingresos_hoy: incomeToday, gastos_hoy: expenseToday, ganancia_neta: incomeToday - expenseToday },
-        deudas: { resumen: cuentas_por_pagar, detalles: recordatorios_pago }
-    };
 
     const temporalIntent = detectTemporalIntent(userQuestion);
     if (temporalIntent) {
