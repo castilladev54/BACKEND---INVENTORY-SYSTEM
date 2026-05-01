@@ -3,7 +3,7 @@
 // Si la respuesta no se completó en el SLA, cortamos de raíz con 504.
 // Esto protege el Event Loop de acumular miles de handlers zombi.
 
-const SLA_TIMEOUT_MS = Number(process.env.SLA_TIMEOUT_MS) || 1500; // 1.5 segundos
+const SLA_TIMEOUT_MS = Number(process.env.SLA_TIMEOUT_MS) || 30000; // 30 segundos
 
 export const slaTimeout = (req, res, next) => {
   const timer = setTimeout(() => {

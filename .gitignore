@@ -4,3 +4,4 @@ node_modules/
 .load-test.js
 .vitest.config.js
 .vercel.json
+isolate-*.log

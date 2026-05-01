@@ -16,9 +16,18 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'customer'],
+    enum: ['admin', 'customer', 'employee'],
     required: true,
     default: 'customer'
+  },
+  owner_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  permissions: {
+    type: [String],
+    default: []
   },
   av_inventory_cost: {
     type: Number,

@@ -16,6 +16,7 @@ import { globalLimiter, authLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { verifyToken } from "./middleware/verifyToken.js";
 import { checkSubscription } from "./middleware/checkSubscription.js";
+import { injectBusinessContext } from "./middleware/requirePermission.js";
 import { slaTimeout } from "./middleware/sla.middleware.js";
 
 // Rutas
@@ -26,6 +27,7 @@ import purchaseRoutes from "./routes/purchase.route.js";
 import saleRoutes from "./routes/sale.route.js";
 import adjustmentRoutes from "./routes/adjustment.route.js";
 import aiRoutes from "./routes/ai.route.js";
+import staffRoutes from "./routes/staff.route.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -37,6 +39,11 @@ app.set('trust proxy', 1);
 // 0. HEALTH CHECK (Antes del Rate Limiter y de la inicialización de BD)
 // Un health check no debe bloquearse por IP ni esperar a la base de datos para responder.
 app.get("/api/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
+
+// Ruta raíz para evitar errores 403/404 al visitar la URL del backend directamente
+app.get("/", (req, res) => {
+  res.status(200).send("🚀 CastillaWeb Backend API está funcionando correctamente.");
+});
 
 // 1. SLA TIMEOUT (Fail Fast: corta cualquier request que exceda 1.5s)
 app.use(slaTimeout);
@@ -76,7 +83,7 @@ app.use("/api/auth", authLimiter, authRoutes);
 // 4. RUTAS PROTEGIDAS (Middleware de flujo)
 // Aplicamos el middleware a nivel de prefijo para no repetirlo en cada línea
 const protectedRouter = express.Router();
-protectedRouter.use(verifyToken, checkSubscription);
+protectedRouter.use(verifyToken, checkSubscription, injectBusinessContext);
 
 app.use("/api/categories", protectedRouter, categoryRoutes);
 app.use("/api/products", protectedRouter, productRoutes);
@@ -84,6 +91,7 @@ app.use("/api/purchases", protectedRouter, purchaseRoutes);
 app.use("/api/sales", protectedRouter, saleRoutes);
 app.use("/api/adjustments", protectedRouter, adjustmentRoutes);
 app.use("/api/ai", protectedRouter, aiRoutes);
+app.use("/api/staff", protectedRouter, staffRoutes);
 
 // 5. FRONTEND (Producción local únicamente — en Vercel el frontend es una app separada)
 if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
