@@ -8,7 +8,7 @@ const saleItemSchema = z.object({
 
 export const createSaleSchema = z.object({
   body: z.object({
-    customer_id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Customer ID format"),
+    // customer_id es resuelto por injectBusinessContext (req.userId), NO viene del body
     items: z.array(saleItemSchema).min(1, "At least one product item is required"),
     payment_method: z.string().min(1, "Payment method is required")
   })

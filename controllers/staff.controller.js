@@ -7,10 +7,9 @@ import bcryptjs from 'bcryptjs';
 export const createEmployee = async (req, res) => {
   try {
     const { email, password, name, permissions } = req.body;
-    
-    // Validar que el creador sea un 'customer' (dueño de negocio)
-    const owner = await User.findById(req.userId);
-    if (!owner || owner.role !== 'customer') {
+
+    // req.userRole ya fue resuelto por injectBusinessContext — sin DB query extra
+    if (req.userRole !== 'customer' && req.userRole !== 'admin') {
       return res.status(403).json({ success: false, message: "Solo los dueños de negocio pueden crear empleados." });
     }
 
@@ -26,7 +25,7 @@ export const createEmployee = async (req, res) => {
       password: hashedPassword,
       name,
       role: 'employee',
-      owner_id: owner._id, // Enlazamos al dueño
+      owner_id: req.userId, // req.userId ya es el ownerId (resuelto por injectBusinessContext)
       permissions: permissions || []
     });
 

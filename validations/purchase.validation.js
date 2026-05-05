@@ -8,9 +8,10 @@ const purchaseItemSchema = z.object({
 
 export const createPurchaseSchema = z.object({
   body: z.object({
-    admin_id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Admin ID format"),
+    // admin_id es resuelto por injectBusinessContext (req.userId), NO viene del body
     supplier: z.string().min(1, "Supplier is required"),
-    items: z.array(purchaseItemSchema).min(1, "At least one product item is required")
+    items: z.array(purchaseItemSchema).min(1, "At least one product item is required"),
+    dueDate: z.string().datetime({ offset: true }).optional()
   })
 });
 

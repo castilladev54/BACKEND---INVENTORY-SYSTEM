@@ -24,16 +24,29 @@ const saleDetailSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-// Middleware pre-save: Solo validación de inventario (el controlador descuenta stock)
+// Middleware pre-save: Defensa en profundidad — valida stock dentro de la transacción.
+// IMPORTANTE: usa this.$session() para leer el estado del producto dentro del mismo
+// snapshot de la transacción, evitando lecturas stale en escenarios de alta concurrencia.
 saleDetailSchema.pre('save', async function () {
-    const product = await Product.findById(this.product_id);
-    if (!product) {
-        throw new Error('Producto no encontrado.');
-    }
+    try {
+        const session = this.$session();
+        const query = Product.findById(this.product_id);
+        // Adjuntar la sesión solo si existe (la clave es que sea la misma transacción)
+        if (session) query.session(session);
 
-    // Validación CRÍTICA: Bloquear si el controlador dejó el inventario en negativo
-    if (product.stock < 0) {
-        throw new Error(`Inventario insuficiente. El stock de ${product.name} quedó en negativo.`);
+        const product = await query;
+        if (!product) {
+            throw new Error('Producto no encontrado.');
+        }
+
+        // Validación de segunda línea: el servicio ya lo verificó antes de decrementar,
+        // pero si por algún motivo el stock quedó negativo, lo bloqueamos aquí.
+        if (product.stock < 0) {
+            throw new Error(`Inventario insuficiente. El stock de "${product.name}" quedó en negativo.`);
+        }
+    } catch (error) {
+        // Re-throw para que Mongoose aborte el save y la transacción
+        throw error;
     }
 });
 

@@ -1,21 +1,20 @@
 import { User } from "../models/User.js";
+import { redis } from "../lib/redis.js";
 
-// ─── OPTIMIZACIÓN CRÍTICA ───────────────────────────────────────────────────
-// El profiler reveló que User.findById se ejecutaba en CADA request protegido.
-// 40 VUs × 4 endpoints = 160 roundtrips/segundo a MongoDB Atlas solo para
-// preguntar "¿sigue siendo premium?". La suscripción no cambia cada segundo.
-// Cacheamos el resultado por userId durante 5 minutos en memoria.
-const subscriptionCache = new Map();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+// ─── CACHÉ DE SUSCRIPCIÓN EN REDIS ─────────────────────────────────────────
+// Un Map() en memoria NO persiste entre invocaciones serverless de Vercel.
+// Redis sí persiste — el caché funciona correctamente en producción.
+const SUB_CACHE_TTL = 5 * 60; // 5 minutos en segundos (TTL para Redis)
 
 export const checkSubscription = async (req, res, next) => {
   try {
     const userId = req.userId;
+    const cacheKey = `sub:${userId}`;
 
-    // Verificar caché en memoria primero
-    const cached = subscriptionCache.get(userId);
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
-      if (cached.expired) {
+    // Verificar caché en Redis primero
+    const cached = await redis.get(cacheKey);
+    if (cached !== null) {
+      if (cached === 'expired') {
         return res.status(403).json({
           success: false,
           message: "Tu suscripción de 7 días ha vencido. Por favor, contacta al administrador para renovar."
@@ -31,15 +30,13 @@ export const checkSubscription = async (req, res, next) => {
     }
 
     if (!user.subscriptionExpiresAt) {
-      // In case old users don't have it, we could let them pass or give them an error.
-      // We will let them pass for backward compatibility or give them a default
-      subscriptionCache.set(userId, { expired: false, timestamp: Date.now() });
+      // Compatibilidad con usuarios anteriores: dejarlos pasar
+      await redis.set(cacheKey, 'active', { ex: SUB_CACHE_TTL });
       return next();
     }
 
-    // Comparamos si hoy ya superó su fecha límite
     const isExpired = new Date() > user.subscriptionExpiresAt;
-    subscriptionCache.set(userId, { expired: isExpired, timestamp: Date.now() });
+    await redis.set(cacheKey, isExpired ? 'expired' : 'active', { ex: SUB_CACHE_TTL });
 
     if (isExpired) {
       return res.status(403).json({
@@ -54,4 +51,3 @@ export const checkSubscription = async (req, res, next) => {
     res.status(500).json({ success: false, message: "Error verificando suscripción" });
   }
 };
-

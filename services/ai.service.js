@@ -65,6 +65,15 @@ const getTodayVE = () => {
     return new Date(midnightVE.getTime() - VE_OFFSET_MS);
 };
 
+// ─── Helper: timeout para cualquier promesa ──────────────────────────────
+const withTimeout = (promise, ms = 8000) =>
+    Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('DB query timeout')), ms)
+        )
+    ]);
+
 // ─── PASO 2: Aggregation Pipeline Condicional ─────────────────────────
 const fetchTemporalContext = async (userId, daysBack, label) => {
     const todayVE = getTodayVE();
@@ -133,14 +142,6 @@ export const getAIAdviceStreamService = async (userId, userQuestion) => {
         nextWeek.setDate(nextWeek.getDate() + 7);
 
         // ─── Todas las consultas en PARALELO (evita timeout) ──────────────
-        const withTimeout = (promise, ms = 8000) =>
-            Promise.race([
-                promise,
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('DB query timeout')), ms)
-                )
-            ]);
-
         const [
             criticalStock,
             salesToday,

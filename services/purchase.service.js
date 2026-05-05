@@ -135,6 +135,6 @@ export const registerPayment = async (purchaseId, userId, amount) => {
 export const fetchPayments = async (userId) => {
   return SupplierPayment.find({ admin_id: userId })
     .populate('purchase_id', 'supplier')
-    .sort({ date: -1 })
+    .sort({ createdAt: -1 })
     .lean();
 };

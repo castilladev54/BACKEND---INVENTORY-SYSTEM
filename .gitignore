@@ -5,3 +5,4 @@ node_modules/
 .vitest.config.js
 .vercel.json
 isolate-*.log
+.backend_analysis.md

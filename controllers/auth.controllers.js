@@ -10,7 +10,7 @@ import crypto from "crypto";
 import bcryptjs from "bcryptjs";
 import { generateTokenAndSetCookie } from "../utils/generateTokenAndSetCookie.js";
 import { sendPasswordResetEmail, sendResetSuccessEmail } from "../mailtrap/emails.js";
-import { invalidateCache } from "../lib/redis.js";
+import { bumpCacheVersion } from "../lib/redis.js";
 
 export const createUser = async (req, res) => {
   const { email, password, name, role } = req.body;
@@ -171,13 +171,13 @@ export const checkAuth = async (req, res) => {
   try {
     const user = await User.findById(req.userId).select("-password");
     if (!user) {
-      return res.status(400).json({ success: false, message: "User not found" });
+      return res.status(401).json({ success: false, message: "User not found" });
     }
 
     res.status(200).json({ success: true, user });
   } catch (error) {
     console.error("Error in checkAuth ", error);
-    res.status(400).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -217,7 +217,10 @@ export const purgeUserAndData = async (req, res) => {
     await Product.deleteMany({ user: targetUserId }).session(session);
     await Category.deleteMany({ user: targetUserId }).session(session);
 
-    // 3. Eliminar Usuario (si no existe, abort y 404)
+    // 3. Eliminar empleados del usuario (quedarían huérfanos con owner_id inválido)
+    await User.deleteMany({ owner_id: targetUserId, role: 'employee' }).session(session);
+
+    // 4. Eliminar Usuario (si no existe, abort y 404)
     const deletedUser = await User.findByIdAndDelete(targetUserId).session(session);
     if (!deletedUser) {
       await session.abortTransaction();
@@ -225,17 +228,18 @@ export const purgeUserAndData = async (req, res) => {
       return res.status(404).json({ success: false, message: "Usuario no encontrado." });
     }
 
-    // 4. Confirmar todo en un único commit atómico
+    // 5. Confirmar todo en un único commit atómico
     await session.commitTransaction();
     session.endSession();
 
-    // 5. Invalidar caché del usuario purgado (fuera de la transacción — Redis no es transaccional)
-    await invalidateCache(
-      `categories:${targetUserId}`,
-      `products:${targetUserId}`,
-      `purchases:${targetUserId}`,
-      `sales:${targetUserId}`
-    );
+    // 6. Invalidar caché del usuario purgado usando bumpCacheVersion
+    //    (el formato real es versionado: "products:v3:p1:l20:userId" — invalidateCache con claves simples no funciona)
+    await Promise.all([
+      bumpCacheVersion('categories', targetUserId),
+      bumpCacheVersion('products',   targetUserId),
+      bumpCacheVersion('purchases',  targetUserId),
+      bumpCacheVersion('sales',      targetUserId),
+    ]);
 
     res.status(200).json({ success: true, message: "El usuario y todos sus registros han sido purgados exitosamente de la base de datos." });
   } catch (error) {

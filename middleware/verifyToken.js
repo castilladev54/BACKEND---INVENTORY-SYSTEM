@@ -18,7 +18,11 @@ export const verifyToken = (req, res, next) => {
       if (error.name === "TokenExpiredError") {
         return res.status(401).json({ success: false, message: "Unauthorized - Token expired" });
       }
-      console.log("Error in verifyToken ", error);
+      // JsonWebTokenError, NotBeforeError, etc. → token inválido o manipulado
+      if (error.name === "JsonWebTokenError" || error.name === "NotBeforeError") {
+        return res.status(401).json({ success: false, message: "Unauthorized - invalid token" });
+      }
+      console.error("Unexpected error in verifyToken:", error);
       return res.status(500).json({ success: false, message: "Server error" });
     }
 
