@@ -49,7 +49,9 @@ app.get("/", (req, res) => {
 app.use(slaTimeout);
 
 // 2. SEGURIDAD (Filtros de entrada)
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 app.use(hpp());
 app.use(sanitizeNoSQL);
 app.use(globalLimiter);
