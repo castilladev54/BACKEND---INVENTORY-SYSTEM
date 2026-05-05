@@ -45,6 +45,9 @@ app.get("/", (req, res) => {
   res.status(200).send("🚀 CastillaWeb Backend API está funcionando correctamente.");
 });
 
+// Bloqueo rápido de favicons para ahorrar costos de Serverless Functions en Vercel
+app.get(["/favicon.ico", "/favicon.png", "/apple-touch-icon.png"], (req, res) => res.status(204).end());
+
 // 1. CORS Y PARSING
 app.use(cors({
   origin: true,
