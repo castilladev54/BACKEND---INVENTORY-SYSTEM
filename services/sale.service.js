@@ -7,7 +7,7 @@ import { Product } from '../models/Product.js';
  * Servicio transaccional para crear ventas. 
  * Garantiza Atomicidad: O se creaan Venta y Detalles descontando todos los stocks, o se revierte todo.
  */
-export const createSaleProcess = async (userId, items, payment_method) => {
+export const createSaleProcess = async (userId, soldBy, items, payment_method) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -41,6 +41,7 @@ export const createSaleProcess = async (userId, items, payment_method) => {
         // 1. Crear la Venta General
         const sale = new Sale({
             customer_id: userId,
+            sold_by: soldBy,
             total_amount,
             payment_method,
             status: 'completed'
@@ -73,9 +74,13 @@ export const createSaleProcess = async (userId, items, payment_method) => {
 /**
  * Servicio Limpio de Lectura para Listado de Ventas
  */
-export const fetchSales = async (userId) => {
-    return Sale.find({ customer_id: userId })
+export const fetchSales = async (userId, sellerId = null) => {
+    const filter = { customer_id: userId };
+    if (sellerId) filter.sold_by = sellerId;
+
+    return Sale.find(filter)
         .populate('customer_id', 'name email')
+        .populate('sold_by', 'name email')
         .sort({ createdAt: -1 })
         .lean();
 };
@@ -86,6 +91,7 @@ export const fetchSales = async (userId) => {
 export const fetchSaleById = async (id, userId) => {
     const sale = await Sale.findOne({ _id: id, customer_id: userId })
         .populate('customer_id', 'name email')
+        .populate('sold_by', 'name email')
         .lean();
     
     if (!sale) return null;

@@ -6,6 +6,11 @@ const saleSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  sold_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   total_amount: {
     type: Number,
     required: true
@@ -22,5 +27,6 @@ const saleSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 saleSchema.index({ customer_id: 1, createdAt: -1 });
+saleSchema.index({ customer_id: 1, sold_by: 1, createdAt: -1 });
 
 export const Sale = mongoose.model('Sale', saleSchema);
