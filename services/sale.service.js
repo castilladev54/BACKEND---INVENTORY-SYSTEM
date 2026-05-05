@@ -88,8 +88,14 @@ export const fetchSales = async (userId, sellerId = null) => {
 /**
  * Servicio Limpio de Lectura Detalles de una Venta Específica
  */
-export const fetchSaleById = async (id, userId) => {
-    const sale = await Sale.findOne({ _id: id, customer_id: userId })
+export const fetchSaleById = async (id, userId, isEmployee = false) => {
+    // Empleado: solo puede ver ventas donde él fue el vendedor
+    // Dueño:    puede ver cualquier venta de su negocio
+    const filter = isEmployee
+        ? { _id: id, sold_by: userId }
+        : { _id: id, customer_id: userId };
+
+    const sale = await Sale.findOne(filter)
         .populate('customer_id', 'name email')
         .populate('sold_by', 'name email')
         .lean();

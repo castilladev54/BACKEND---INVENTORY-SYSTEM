@@ -46,17 +46,28 @@ export const createSale = async (req, res) => {
 
 export const getSales = async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const skip = (page - 1) * limit;
-    const sellerId = req.query.seller || null; // ?seller=<employeeId>
+    const skip  = (page - 1) * limit;
 
-    const version = await getCacheVersion('sales', req.userId);
-    const cacheKey = buildPaginatedKey('sales', version, page, limit, req.userId) + (sellerId ? `:s${sellerId}` : '');
+    // Resolver rol del caller una sola vez
+    const caller = await User.findById(req.userId).select('role owner_id').lean();
+    const isEmployee = caller?.role === 'employee';
+
+    // Empleado: ve solo sus ventas → scope de caché es el dueño (owner_id)
+    // Dueño:    ve todas las ventas de su negocio + filtro opcional por vendedor
+    const cacheScope = isEmployee ? caller.owner_id : req.userId;
+    const sellerId   = (!isEmployee && req.query.seller) ? req.query.seller : null;
+
+    const version  = await getCacheVersion('sales', cacheScope);
+    const cacheKey = buildPaginatedKey('sales', version, page, limit, cacheScope)
+      + (isEmployee ? `:emp${req.userId}` : (sellerId ? `:s${sellerId}` : ''));
 
     const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
-      const filter = { customer_id: req.userId };
-      if (sellerId) filter.sold_by = sellerId;
+      const filter = isEmployee
+        ? { sold_by: req.userId }                          // empleado → solo las suyas
+        : { customer_id: req.userId,                       // dueño → todo el negocio
+            ...(sellerId && { sold_by: sellerId }) };      //         + filtro vendedor
 
       const [sales, total] = await Promise.all([
         Sale.find(filter)
@@ -69,12 +80,7 @@ export const getSales = async (req, res) => {
         Sale.countDocuments(filter)
       ]);
 
-      return {
-        sales,
-        total,
-        totalPages: Math.ceil(total / limit),
-        currentPage: page
-      };
+      return { sales, total, totalPages: Math.ceil(total / limit), currentPage: page };
     }, 120);
 
     res.status(200).json({
@@ -93,21 +99,21 @@ export const getSales = async (req, res) => {
 export const getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
-    const cacheKey = `sale:${id}:${req.userId}`;
+
+    // Resolver rol para construir el filtro correcto
+    const caller     = await User.findById(req.userId).select('role').lean();
+    const isEmployee = caller?.role === 'employee';
+    const cacheKey   = `sale:${id}:${req.userId}`;
 
     const { data, fromCache } = await getOrSetCache(cacheKey, () =>
-      fetchSaleById(id, req.userId),
-      300); // TTL 5 min
+      fetchSaleById(id, req.userId, isEmployee),
+      300);
 
     if (!data) {
       return res.status(404).json({ success: false, message: "Venta no encontrada" });
     }
 
-    res.status(200).json({
-      success: true,
-      sale: data,
-      fromCache
-    });
+    res.status(200).json({ success: true, sale: data, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
