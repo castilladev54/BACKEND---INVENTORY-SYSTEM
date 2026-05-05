@@ -45,10 +45,16 @@ app.get("/", (req, res) => {
   res.status(200).send("🚀 CastillaWeb Backend API está funcionando correctamente.");
 });
 
-// 1. SLA TIMEOUT (Fail Fast: corta cualquier request que exceda 1.5s)
+// 1. CORS Y PARSING
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+// 1.5 SLA TIMEOUT (Fail Fast: corta cualquier request que exceda 1.5s)
 app.use(slaTimeout);
 
-// 2. SEGURIDAD (Filtros de entrada)
+// 3. SEGURIDAD (Filtros de entrada)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
@@ -56,11 +62,6 @@ app.use(hpp());
 app.use(sanitizeNoSQL);
 app.use(globalLimiter);
 
-// 2. CONFIGURACIÓN Y PARSING
-app.use(cors({
-  origin: [process.env.CLIENT_URL, "https://dashboard-react-tailwindcss.vercel.app", "http://localhost:5173"].filter(Boolean),
-  credentials: true
-}));
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());
