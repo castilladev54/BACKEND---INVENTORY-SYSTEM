@@ -51,23 +51,32 @@ export const getSales = async (req, res) => {
     const skip  = (page - 1) * limit;
 
     // Resolver rol del caller una sola vez
-    const caller = await User.findById(req.userId).select('role owner_id').lean();
+    const caller     = await User.findById(req.userId).select('role owner_id').lean();
     const isEmployee = caller?.role === 'employee';
 
-    // Empleado: ve solo sus ventas → scope de caché es el dueño (owner_id)
+    // Empleado: ve solo SUS ventas (sold_by) dentro del scope del dueño (owner_id)
     // Dueño:    ve todas las ventas de su negocio + filtro opcional por vendedor
-    const cacheScope = isEmployee ? caller.owner_id : req.userId;
+    const ownerId    = isEmployee ? caller?.owner_id : req.userId;
     const sellerId   = (!isEmployee && req.query.seller) ? req.query.seller : null;
 
-    const version  = await getCacheVersion('sales', cacheScope);
+    // Scope de caché separado por empleado para evitar cruzar datos entre usuarios
+    const cacheScope = isEmployee ? `${ownerId}:emp:${req.userId}` : req.userId;
+
+    const version  = await getCacheVersion('sales', String(ownerId));
     const cacheKey = buildPaginatedKey('sales', version, page, limit, cacheScope)
-      + (isEmployee ? `:emp${req.userId}` : (sellerId ? `:s${sellerId}` : ''));
+      + (sellerId ? `:s${sellerId}` : '');
 
     const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
-      const filter = isEmployee
-        ? { sold_by: req.userId }                          // empleado → solo las suyas
-        : { customer_id: req.userId,                       // dueño → todo el negocio
-            ...(sellerId && { sold_by: sellerId }) };      //         + filtro vendedor
+      let filter;
+
+      if (isEmployee) {
+        // Empleado: ventas donde ÉL fue el vendedor dentro del negocio del dueño
+        filter = { customer_id: ownerId, sold_by: req.userId };
+      } else {
+        // Dueño: todas las ventas de su negocio, con filtro opcional por vendedor
+        filter = { customer_id: req.userId };
+        if (sellerId) filter.sold_by = sellerId;
+      }
 
       const [sales, total] = await Promise.all([
         Sale.find(filter)
@@ -95,6 +104,7 @@ export const getSales = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
 
 export const getSaleById = async (req, res) => {
   try {
