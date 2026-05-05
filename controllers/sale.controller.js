@@ -1,7 +1,6 @@
 import { invalidateCache, getOrSetCache, getCacheVersion, bumpCacheVersion, buildPaginatedKey } from '../lib/redis.js';
 import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
-import { User } from '../models/User.js';
 import { createSaleProcess, fetchSaleById } from '../services/sale.service.js';
 
 
@@ -9,15 +8,13 @@ export const createSale = async (req, res) => {
   try {
     const { items, payment_method } = req.body;
 
-    // Determinar quién es el dueño del negocio (customer_id)
-    // Si el que vende es un empleado, el owner es su owner_id
-    // Si es el propio dueño, owner_id es null → usa su propio _id
-    const caller = await User.findById(req.userId).select('role owner_id').lean();
-    const ownerId = (caller?.role === 'employee' && caller?.owner_id)
-      ? caller.owner_id
-      : req.userId;
+    // injectBusinessContext ya resolvió:
+    //   req.userId     = ID del dueño del negocio (ownerId)
+    //   req.realUserId = ID real de quien hizo login (empleado o dueño)
+    const ownerId = req.userId;
+    const soldBy  = req.realUserId;
 
-    const sale = await createSaleProcess(ownerId, req.userId, items, payment_method);
+    const sale = await createSaleProcess(ownerId, soldBy, items, payment_method);
 
     // Invalidar caché paginada de ventas y productos (usando el ownerId como scope)
     const keysToInvalidate = [];
@@ -50,17 +47,16 @@ export const getSales = async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const skip  = (page - 1) * limit;
 
-    // Resolver rol del caller una sola vez
-    const caller     = await User.findById(req.userId).select('role owner_id').lean();
-    const isEmployee = caller?.role === 'employee';
+    // Usar contexto inyectado por injectBusinessContext (evita consulta redundante a DB)
+    const isEmployee = req.userRole === 'employee';
+    const ownerId    = req.userId; // Ya es el ID del dueño del negocio
 
-    // Empleado: ve solo SUS ventas (sold_by) dentro del scope del dueño (owner_id)
+    // Empleado: ve solo SUS ventas (sold_by) dentro del scope del dueño
     // Dueño:    ve todas las ventas de su negocio + filtro opcional por vendedor
-    const ownerId    = isEmployee ? caller?.owner_id : req.userId;
     const sellerId   = (!isEmployee && req.query.seller) ? req.query.seller : null;
 
     // Scope de caché separado por empleado para evitar cruzar datos entre usuarios
-    const cacheScope = isEmployee ? `${ownerId}:emp:${req.userId}` : req.userId;
+    const cacheScope = isEmployee ? `${ownerId}:emp:${req.realUserId}` : ownerId;
 
     const version  = await getCacheVersion('sales', String(ownerId));
     const cacheKey = buildPaginatedKey('sales', version, page, limit, cacheScope)
@@ -71,7 +67,7 @@ export const getSales = async (req, res) => {
 
       if (isEmployee) {
         // Empleado: ventas donde ÉL fue el vendedor dentro del negocio del dueño
-        filter = { customer_id: ownerId, sold_by: req.userId };
+        filter = { customer_id: ownerId, sold_by: req.realUserId };
       } else {
         // Dueño: todas las ventas de su negocio, con filtro opcional por vendedor
         filter = { customer_id: req.userId };
@@ -110,13 +106,16 @@ export const getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Resolver rol para construir el filtro correcto
-    const caller     = await User.findById(req.userId).select('role').lean();
-    const isEmployee = caller?.role === 'employee';
-    const cacheKey   = `sale:${id}:${req.userId}`;
+    // Usar contexto inyectado por injectBusinessContext
+    const isEmployee = req.userRole === 'employee';
+    const cacheKey   = `sale:${id}:${req.realUserId}`;
+
+    // Empleado → busca por sold_by (su ID real)
+    // Dueño   → busca por customer_id (ownerId)
+    const lookupId = isEmployee ? req.realUserId : req.userId;
 
     const { data, fromCache } = await getOrSetCache(cacheKey, () =>
-      fetchSaleById(id, req.userId, isEmployee),
+      fetchSaleById(id, lookupId, isEmployee),
       300);
 
     if (!data) {
