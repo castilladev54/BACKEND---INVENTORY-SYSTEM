@@ -3,6 +3,26 @@ import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
 import { createSaleProcess, fetchSaleById } from '../services/sale.service.js';
 
+// Venezuela = UTC-4. El backend corre en UTC (Vercel).
+// Sin esta corrección, setHours(0,0,0,0) pondría la medianoche en UTC,
+// causando un desfase de 4h → "Ayer" mostraría ventas del día equivocado.
+const VE_OFFSET_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Devuelve { start, end } en UTC correspondientes al inicio y fin
+ * del día `offsetDays` relativo a hoy en hora Venezuela.
+ * offsetDays = 0 → hoy VE, -1 → ayer VE, -6 → hace 6 días VE, etc.
+ */
+function dayRangeVE(offsetDays = 0) {
+  const nowVE = new Date(Date.now() - VE_OFFSET_MS); // hora actual en VE como si fuera UTC
+  const y = nowVE.getUTCFullYear();
+  const m = nowVE.getUTCMonth();
+  const d = nowVE.getUTCDate() + offsetDays;
+  const start = new Date(Date.UTC(y, m, d,  0,  0,  0,   0) + VE_OFFSET_MS);
+  const end   = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) + VE_OFFSET_MS);
+  return { start, end };
+}
+
 
 export const createSale = async (req, res) => {
   try {
@@ -60,38 +80,32 @@ export const getSales = async (req, res) => {
     const dateFilterParam = req.query.dateFilter; // today | 7days | 30days | month | custom | all
     let dateFilter = null;
 
-    // Períodos rápidos → calcular rango dinámico en UTC-local del servidor
+    // Períodos rápidos → calcular rango en hora Venezuela (UTC-4)
     if (dateFilterParam && dateFilterParam !== 'all' && dateFilterParam !== 'custom') {
-      const now = new Date();
-      const start = new Date();
 
       if (dateFilterParam === 'today') {
-        start.setHours(0, 0, 0, 0);
-        const end = new Date();
-        end.setHours(23, 59, 59, 999);
+        const { start, end } = dayRangeVE(0);
         dateFilter = { $gte: start, $lte: end };
 
       } else if (dateFilterParam === 'ayer') {
-        start.setDate(start.getDate() - 1);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(start);
-        end.setHours(23, 59, 59, 999);
+        const { start, end } = dayRangeVE(-1);
         dateFilter = { $gte: start, $lte: end };
 
       } else if (dateFilterParam === '7days') {
-        start.setDate(now.getDate() - 6);
-        start.setHours(0, 0, 0, 0);
-        dateFilter = { $gte: start, $lte: now };
+        const { start } = dayRangeVE(-6);
+        const { end }   = dayRangeVE(0);
+        dateFilter = { $gte: start, $lte: end };
 
       } else if (dateFilterParam === '30days') {
-        start.setDate(now.getDate() - 29);
-        start.setHours(0, 0, 0, 0);
-        dateFilter = { $gte: start, $lte: now };
+        const { start } = dayRangeVE(-29);
+        const { end }   = dayRangeVE(0);
+        dateFilter = { $gte: start, $lte: end };
 
       } else if (dateFilterParam === 'month') {
-        start.setDate(1);
-        start.setHours(0, 0, 0, 0);
-        dateFilter = { $gte: start, $lte: now };
+        const nowVE   = new Date(Date.now() - VE_OFFSET_MS);
+        const firstDay = new Date(Date.UTC(nowVE.getUTCFullYear(), nowVE.getUTCMonth(), 1, 0, 0, 0, 0) + VE_OFFSET_MS);
+        const { end } = dayRangeVE(0);
+        dateFilter = { $gte: firstDay, $lte: end };
       }
 
       // Rango manual (custom) → usar dateFrom / dateTo

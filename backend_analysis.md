@@ -1,5 +1,5 @@
 # 📋 Backend Analysis — CastillaWeb Inventory System
-> Última actualización: 2026-05-05 · Versión del análisis: 3.0
+> Última actualización: 2026-05-07 · Versión del análisis: 3.1
 
 ---
 
@@ -258,6 +258,7 @@ El backend corre en UTC (Vercel). Venezuela es UTC-4. Sin corrección, una venta
 | BUG-10 | `SaleDetail.js` | Pre-save hook leía producto sin sesión → datos stale en concurrencia | Usa `this.$session()` + `try/catch` |
 | BUG-11 | `purchase.service.js` | `fetchPayments` ordenaba por `date` (inconsistente) | Cambiado a `createdAt` |
 | BUG-EXTRA | `PurchaseDetail.js` | Aggregate de costo promedio sin filtro `admin_id` → calculaba el promedio de **todos los tenants** | Pipeline con `$lookup + $match` por `admin_id` |
+| BUG-TZ | `sale.controller.js` | Filtros de fecha rápidos (`today`, `ayer`, `7days`, `30days`, `month`) calculaban medianoche con `setHours(0,0,0,0)` en UTC (servidor). Venezuela = UTC-4, lo que causaba un desfase de 4h: "Ayer" mostraba ventas del día anterior al esperado. | Helper `dayRangeVE(offsetDays)` que calcula la medianoche en hora Venezuela restando `VE_OFFSET_MS = 4h` y convierte el rango correcto a UTC para MongoDB. |
 
 ---
 

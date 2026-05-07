@@ -96,16 +96,32 @@ export const createProduct = async (req, res) => {
 export const getProducts = async (req, res) => {
   try {
     // ─── Parámetros de paginación con defaults seguros ────────────────
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const skip = (page - 1) * limit;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    // Subimos el cap a 5000 para soportar fetchAllForPOS (carga masiva del POS)
+    const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip  = (page - 1) * limit;
 
-    // ─── Cache key versionada (invalida en bloque al crear/editar/borrar) ─
-    const version = await getCacheVersion('products', req.userId);
-    const cacheKey = buildPaginatedKey('products', version, page, limit, req.userId);
+    // ─── Parámetro de búsqueda opcional ──────────────────────────────
+    const search = req.query.search?.trim() || "";
+
+    // ─── Cache key versionada ─────────────────────────────────────────
+    // Se incluye `search` en la clave para que los resultados filtrados
+    // tengan su propio slot y no contaminen el listado paginado normal.
+    const version   = await getCacheVersion('products', req.userId);
+    const searchSlug = search
+      ? `:s${Buffer.from(search).toString("base64url")}`
+      : "";
+    const cacheKey = buildPaginatedKey('products', version, page, limit, req.userId) + searchSlug;
 
     const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
+      // ─── Filtro base: siempre por usuario ─────────────────────────
       const filter = { user: req.userId };
+
+      // ─── Filtro de búsqueda por nombre O código de barras ─────────
+      if (search) {
+        const regex = new RegExp(search, "i"); // case-insensitive
+        filter.$or = [{ name: regex }, { barcode: regex }];
+      }
 
       // ─── Promise.all: find + count corren en PARALELO ────────────────
       const [products, total] = await Promise.all([
@@ -121,10 +137,10 @@ export const getProducts = async (req, res) => {
       return {
         products,
         total,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(total / limit) || 1,
         currentPage: page
       };
-    }, 300); // TTL 5 min: los productos cambian con frecuencia
+    }, 300); // TTL 5 min
 
     // Protección: si la página pedida no existe, devolver vacío sin error
     if (data.currentPage > data.totalPages && data.totalPages > 0) {

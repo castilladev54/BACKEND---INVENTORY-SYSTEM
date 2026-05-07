@@ -1,6 +1,19 @@
 import { User } from '../models/User.js';
 import bcryptjs from 'bcryptjs';
 
+// Venezuela = UTC-4. Misma lógica de corrección de timezone que sale.controller.js
+const VE_OFFSET_MS = 4 * 60 * 60 * 1000;
+
+function dayRangeVE(offsetDays = 0) {
+  const nowVE = new Date(Date.now() - VE_OFFSET_MS);
+  const y = nowVE.getUTCFullYear();
+  const m = nowVE.getUTCMonth();
+  const d = nowVE.getUTCDate() + offsetDays;
+  const start = new Date(Date.UTC(y, m, d,  0,  0,  0,   0) + VE_OFFSET_MS);
+  const end   = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) + VE_OFFSET_MS);
+  return { start, end };
+}
+
 /**
  * Crea un nuevo empleado asociado al dueño del negocio.
  */
@@ -48,16 +61,72 @@ export const createEmployee = async (req, res) => {
 
 /**
  * Obtiene la lista de empleados del dueño de negocio actual.
+ * Soporta filtro de fecha de registro (createdAt) vía query params:
+ *   dateFilter = today | ayer | 7days | 30days | month | all (default)
+ *   dateFrom   = YYYY-MM-DD  (rango personalizado, requiere también dateTo)
+ *   dateTo     = YYYY-MM-DD
  */
 export const getEmployees = async (req, res) => {
   try {
-    const ownerId = req.userId; // El que pide la lista debe ser el dueño
+    const ownerId = req.userId;
 
-    const employees = await User.find({ owner_id: ownerId, role: 'employee' })
+    // --- Filtro de fecha de registro ---
+    const { dateFrom, dateTo } = req.query;
+    const dateFilterParam = req.query.dateFilter; // today | ayer | 7days | 30days | month | all
+    let createdAtFilter = null;
+
+    if (dateFilterParam && dateFilterParam !== 'all' && dateFilterParam !== 'custom') {
+
+      if (dateFilterParam === 'today') {
+        const { start, end } = dayRangeVE(0);
+        createdAtFilter = { $gte: start, $lte: end };
+
+      } else if (dateFilterParam === 'ayer') {
+        const { start, end } = dayRangeVE(-1);
+        createdAtFilter = { $gte: start, $lte: end };
+
+      } else if (dateFilterParam === '7days') {
+        const { start } = dayRangeVE(-6);
+        const { end }   = dayRangeVE(0);
+        createdAtFilter = { $gte: start, $lte: end };
+
+      } else if (dateFilterParam === '30days') {
+        const { start } = dayRangeVE(-29);
+        const { end }   = dayRangeVE(0);
+        createdAtFilter = { $gte: start, $lte: end };
+
+      } else if (dateFilterParam === 'month') {
+        const nowVE    = new Date(Date.now() - VE_OFFSET_MS);
+        const firstDay = new Date(Date.UTC(nowVE.getUTCFullYear(), nowVE.getUTCMonth(), 1, 0, 0, 0, 0) + VE_OFFSET_MS);
+        const { end }  = dayRangeVE(0);
+        createdAtFilter = { $gte: firstDay, $lte: end };
+      }
+
+    } else if (dateFrom || dateTo) {
+      // Rango manual
+      createdAtFilter = {};
+      if (dateFrom) {
+        const from = new Date(dateFrom + 'T04:00:00.000Z'); // medianoche VE → UTC
+        if (!isNaN(from)) createdAtFilter.$gte = from;
+      }
+      if (dateTo) {
+        const to = new Date(dateTo + 'T04:00:00.000Z');
+        if (!isNaN(to)) {
+          to.setUTCHours(to.getUTCHours() + 23, 59, 59, 999); // fin del día VE
+          createdAtFilter.$lte = to;
+        }
+      }
+    }
+
+    const filter = { owner_id: ownerId, role: 'employee' };
+    if (createdAtFilter) filter.createdAt = createdAtFilter;
+
+    const employees = await User.find(filter)
       .select('-password')
+      .sort({ createdAt: -1 })
       .lean();
 
-    res.status(200).json({ success: true, employees });
+    res.status(200).json({ success: true, employees, total: employees.length });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
