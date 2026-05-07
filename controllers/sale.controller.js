@@ -12,7 +12,7 @@ export const createSale = async (req, res) => {
     //   req.userId     = ID del dueño del negocio (ownerId)
     //   req.realUserId = ID real de quien hizo login (empleado o dueño)
     const ownerId = req.userId;
-    const soldBy  = req.realUserId;
+    const soldBy = req.realUserId;
 
     const sale = await createSaleProcess(ownerId, soldBy, items, payment_method);
 
@@ -43,24 +43,84 @@ export const createSale = async (req, res) => {
 
 export const getSales = async (req, res) => {
   try {
-    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     // Usar contexto inyectado por injectBusinessContext (evita consulta redundante a DB)
     const isEmployee = req.userRole === 'employee';
-    const ownerId    = req.userId; // Ya es el ID del dueño del negocio
+    const ownerId = req.userId; // Ya es el ID del dueño del negocio
 
     // Empleado: ve solo SUS ventas (sold_by) dentro del scope del dueño
     // Dueño:    ve todas las ventas de su negocio + filtro opcional por vendedor
-    const sellerId   = (!isEmployee && req.query.seller) ? req.query.seller : null;
+    const sellerId = (!isEmployee && req.query.seller) ? req.query.seller : null;
+
+    // --- Resolver filtro de fechas ---
+    const { dateFrom, dateTo } = req.query;
+    const dateFilterParam = req.query.dateFilter; // today | 7days | 30days | month | custom | all
+    let dateFilter = null;
+
+    // Períodos rápidos → calcular rango dinámico en UTC-local del servidor
+    if (dateFilterParam && dateFilterParam !== 'all' && dateFilterParam !== 'custom') {
+      const now = new Date();
+      const start = new Date();
+
+      if (dateFilterParam === 'today') {
+        start.setHours(0, 0, 0, 0);
+        const end = new Date();
+        end.setHours(23, 59, 59, 999);
+        dateFilter = { $gte: start, $lte: end };
+
+      } else if (dateFilterParam === 'ayer') {
+        start.setDate(start.getDate() - 1);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setHours(23, 59, 59, 999);
+        dateFilter = { $gte: start, $lte: end };
+
+      } else if (dateFilterParam === '7days') {
+        start.setDate(now.getDate() - 6);
+        start.setHours(0, 0, 0, 0);
+        dateFilter = { $gte: start, $lte: now };
+
+      } else if (dateFilterParam === '30days') {
+        start.setDate(now.getDate() - 29);
+        start.setHours(0, 0, 0, 0);
+        dateFilter = { $gte: start, $lte: now };
+
+      } else if (dateFilterParam === 'month') {
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        dateFilter = { $gte: start, $lte: now };
+      }
+
+      // Rango manual (custom) → usar dateFrom / dateTo
+    } else if (dateFrom || dateTo) {
+      dateFilter = {};
+      if (dateFrom) {
+        const from = new Date(dateFrom);
+        if (!isNaN(from)) dateFilter.$gte = from;
+      }
+      if (dateTo) {
+        const to = new Date(dateTo);
+        if (!isNaN(to)) {
+          to.setHours(23, 59, 59, 999);
+          dateFilter.$lte = to;
+        }
+      }
+    }
 
     // Scope de caché separado por empleado para evitar cruzar datos entre usuarios
     const cacheScope = isEmployee ? `${ownerId}:emp:${req.realUserId}` : ownerId;
 
-    const version  = await getCacheVersion('sales', String(ownerId));
+    const version = await getCacheVersion('sales', String(ownerId));
+    // Incluir el rango de fechas en el cache key para que no colisionen rangos distintos
+    const dateSegment = dateFilterParam && dateFilterParam !== 'all'
+      ? `:df${dateFilterParam}`
+      : (dateFrom || dateTo ? `:df${dateFrom || ''}:dt${dateTo || ''}` : '');
     const cacheKey = buildPaginatedKey('sales', version, page, limit, cacheScope)
-      + (sellerId ? `:s${sellerId}` : '');
+      + (sellerId ? `:s${sellerId}` : '')
+      + dateSegment;
 
     const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
       let filter;
@@ -73,6 +133,9 @@ export const getSales = async (req, res) => {
         filter = { customer_id: req.userId };
         if (sellerId) filter.sold_by = sellerId;
       }
+
+      // Aplicar rango de fechas al campo createdAt
+      if (dateFilter) filter.createdAt = dateFilter;
 
       const [sales, total] = await Promise.all([
         Sale.find(filter)
@@ -108,7 +171,7 @@ export const getSaleById = async (req, res) => {
 
     // Usar contexto inyectado por injectBusinessContext
     const isEmployee = req.userRole === 'employee';
-    const cacheKey   = `sale:${id}:${req.realUserId}`;
+    const cacheKey = `sale:${id}:${req.realUserId}`;
 
     // Empleado → busca por sold_by (su ID real)
     // Dueño   → busca por customer_id (ownerId)
