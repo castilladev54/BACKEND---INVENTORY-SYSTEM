@@ -101,29 +101,40 @@ export const getProducts = async (req, res) => {
     const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit) || 20));
     const skip  = (page - 1) * limit;
 
-    // ─── Parámetro de búsqueda opcional ──────────────────────────────
-    const search = req.query.search?.trim() || "";
+    // ─── CORRECCIÓN A: Normalización antes de todo ───────────────────
+    // trim() + toLowerCase() garantiza que "Harina ", "HARINA" y "harina"
+    // comparten el mismo slot de caché (o el mismo bypass de corto).
+    const normalizedSearch = (req.query.search || "").trim().toLowerCase();
+
+    // ─── CORRECCIÓN B: Bypass de caché para búsquedas cortas ─────────
+    // 1–2 caracteres generan demasiadas claves efímeras ("h", "ha", …).
+    // Para esos casos vamos directo a MongoDB sin tocar Redis.
+    const useCache = normalizedSearch.length === 0 || normalizedSearch.length >= 3;
+
+    // ─── CORRECCIÓN C: TTL diferenciado ──────────────────────────────
+    // Búsquedas son volátiles → 30 s. Listados sin búsqueda → 5 min.
+    const ttl = normalizedSearch.length >= 3 ? 30 : 300;
 
     // ─── Cache key versionada ─────────────────────────────────────────
-    // Se incluye `search` en la clave para que los resultados filtrados
-    // tengan su propio slot y no contaminen el listado paginado normal.
-    const version   = await getCacheVersion('products', req.userId);
-    const searchSlug = search
-      ? `:s${Buffer.from(search).toString("base64url")}`
+    const version    = useCache ? await getCacheVersion('products', req.userId) : null;
+    const searchSlug = normalizedSearch
+      ? `:s${Buffer.from(normalizedSearch).toString("base64url")}`
       : "";
-    const cacheKey = buildPaginatedKey('products', version, page, limit, req.userId) + searchSlug;
+    const cacheKey   = useCache
+      ? buildPaginatedKey('products', version, page, limit, req.userId) + searchSlug
+      : null;
 
-    const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
-      // ─── Filtro base: siempre por usuario ─────────────────────────
+    // ─── Función de consulta compartida (usada con o sin caché) ──────
+    const fetchFromDB = async () => {
       const filter = { user: req.userId };
 
-      // ─── Filtro de búsqueda por nombre O código de barras ─────────
-      if (search) {
-        const regex = new RegExp(search, "i"); // case-insensitive
+      if (normalizedSearch) {
+        // La regex ya corre sobre texto normalizado; "i" es redundante pero
+        // inofensivo y cubre diferencias de acento en algunos drivers.
+        const regex = new RegExp(normalizedSearch, "i");
         filter.$or = [{ name: regex }, { barcode: regex }];
       }
 
-      // ─── Promise.all: find + count corren en PARALELO ────────────────
       const [products, total] = await Promise.all([
         Product.find(filter)
           .populate('category', 'name')
@@ -140,7 +151,17 @@ export const getProducts = async (req, res) => {
         totalPages: Math.ceil(total / limit) || 1,
         currentPage: page
       };
-    }, 300); // TTL 5 min
+    };
+
+    // ─── Decidir si ir a Redis o directo a MongoDB ────────────────────
+    let data, fromCache;
+    if (useCache) {
+      ({ data, fromCache } = await getOrSetCache(cacheKey, fetchFromDB, ttl));
+    } else {
+      // Búsqueda de 1–2 chars: sin Redis, sin drama.
+      data      = await fetchFromDB();
+      fromCache = false;
+    }
 
     // Protección: si la página pedida no existe, devolver vacío sin error
     if (data.currentPage > data.totalPages && data.totalPages > 0) {
