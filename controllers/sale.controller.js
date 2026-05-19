@@ -75,6 +75,7 @@ export const getSales = async (req, res) => {
     // Empleado: ve solo SUS ventas (sold_by) dentro del scope del dueño
     // Dueño:    ve todas las ventas de su negocio + filtro opcional por vendedor
     const sellerId = (!isEmployee && req.query.seller) ? req.query.seller : null;
+    const paymentMethod = req.query.paymentMethod || null;
 
     // --- Resolver filtro de fechas ---
     const { dateFrom, dateTo } = req.query;
@@ -135,6 +136,7 @@ export const getSales = async (req, res) => {
       : (dateFrom || dateTo ? `:df${dateFrom || ''}:dt${dateTo || ''}` : '');
     const cacheKey = buildPaginatedKey('sales', version, page, limit, cacheScope)
       + (sellerId ? `:s${sellerId}` : '')
+      + (paymentMethod && paymentMethod !== 'all' ? `:pm${paymentMethod}` : '')
       + dateSegment;
 
     const { data, fromCache } = await getOrSetCache(cacheKey, async () => {
@@ -151,6 +153,11 @@ export const getSales = async (req, res) => {
 
       // Aplicar rango de fechas al campo createdAt
       if (dateFilter) filter.createdAt = dateFilter;
+
+      // Aplicar filtro de método de pago (exacto, gracias al enum estandarizado)
+      if (paymentMethod && paymentMethod !== 'all') {
+        filter.payment_method = paymentMethod;
+      }
 
       // Para el aggregation pipeline es estrictamente necesario que los IDs sean ObjectId
       const aggFilter = { ...filter };

@@ -17,7 +17,8 @@ const saleSchema = new mongoose.Schema({
   },
   payment_method: {
     type: String,
-    required: true
+    required: true,
+    enum: ['Efectivo', 'Divisas', 'Punto de Venta', 'Pago Móvil', 'Transferencia', 'Zelle']
   },
   status: {
     type: String,
