@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { invalidateCache, getOrSetCache, getCacheVersion, bumpCacheVersion, buildPaginatedKey } from '../lib/redis.js';
 import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
@@ -151,7 +152,12 @@ export const getSales = async (req, res) => {
       // Aplicar rango de fechas al campo createdAt
       if (dateFilter) filter.createdAt = dateFilter;
 
-      const [sales, total] = await Promise.all([
+      // Para el aggregation pipeline es estrictamente necesario que los IDs sean ObjectId
+      const aggFilter = { ...filter };
+      if (aggFilter.customer_id) aggFilter.customer_id = new mongoose.Types.ObjectId(aggFilter.customer_id);
+      if (aggFilter.sold_by) aggFilter.sold_by = new mongoose.Types.ObjectId(aggFilter.sold_by);
+
+      const [sales, total, totalAmountAgg] = await Promise.all([
         Sale.find(filter)
           .populate('customer_id', 'name email')
           .populate('sold_by', 'name email')
@@ -159,16 +165,23 @@ export const getSales = async (req, res) => {
           .skip(skip)
           .limit(limit)
           .lean(),
-        Sale.countDocuments(filter)
+        Sale.countDocuments(filter),
+        Sale.aggregate([
+          { $match: aggFilter },
+          { $group: { _id: null, totalAmount: { $sum: "$total_amount" } } }
+        ])
       ]);
 
-      return { sales, total, totalPages: Math.ceil(total / limit), currentPage: page };
+      const totalAmount = totalAmountAgg.length > 0 ? totalAmountAgg[0].totalAmount : 0;
+
+      return { sales, total, totalAmount, totalPages: Math.ceil(total / limit), currentPage: page };
     }, 120);
 
     res.status(200).json({
       success: true,
       sales: data.sales,
       total: data.total,
+      totalAmount: data.totalAmount,
       totalPages: data.totalPages,
       currentPage: data.currentPage,
       fromCache
