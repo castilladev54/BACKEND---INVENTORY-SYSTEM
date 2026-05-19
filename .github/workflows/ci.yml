@@ -29,14 +29,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          # Cache de npm basado en package-lock.json para acelerar instalaciones
-          cache: "npm"
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+          run_install: false
+
+      - name: 🗂️ Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
 
       - name: 📦 Instalar dependencias
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: 🧪 Ejecutar tests (Vitest)
-        run: npm test
+        run: pnpm test
         env:
           NODE_ENV: test
           # JWT necesario para que verifyToken no falle al arrancar el servidor
@@ -62,7 +74,7 @@ jobs:
         run: |
           echo "## 🧪 Resultado de Tests" >> $GITHUB_STEP_SUMMARY
           echo "Node: $(node --version)" >> $GITHUB_STEP_SUMMARY
-          echo "NPM:  $(npm --version)" >> $GITHUB_STEP_SUMMARY
+          echo "PNPM:  $(pnpm --version)" >> $GITHUB_STEP_SUMMARY
 
   # ─────────────────────────────────────────────────────────────
   # 🐳 JOB 2: Docker Build — Valida que el Dockerfile nunca rompa
