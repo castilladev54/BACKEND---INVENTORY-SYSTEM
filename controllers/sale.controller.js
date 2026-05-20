@@ -75,11 +75,18 @@ export const getSales = async (req, res) => {
     // Empleado: ve solo SUS ventas (sold_by) dentro del scope del dueño
     // Dueño:    ve todas las ventas de su negocio + filtro opcional por vendedor
     const sellerId = (!isEmployee && req.query.seller) ? req.query.seller : null;
-    const paymentMethod = req.query.paymentMethod || null;
+    const paymentMethod = isEmployee ? null : (req.query.paymentMethod || null);
 
     // --- Resolver filtro de fechas ---
-    const { dateFrom, dateTo } = req.query;
-    const dateFilterParam = req.query.dateFilter; // today | 7days | 30days | month | custom | all
+    let { dateFrom, dateTo } = req.query;
+    let dateFilterParam = req.query.dateFilter; // today | 7days | 30days | month | custom | all
+
+    // Restricciones para el empleado: solo ventas del día de hoy
+    if (isEmployee) {
+      dateFilterParam = 'today';
+      dateFrom = null;
+      dateTo = null;
+    }
     let dateFilter = null;
 
     // Períodos rápidos → calcular rango en hora Venezuela (UTC-4)
