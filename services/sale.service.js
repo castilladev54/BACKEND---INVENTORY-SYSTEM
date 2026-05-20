@@ -108,3 +108,138 @@ export const fetchSaleById = async (id, userId, isEmployee = false) => {
     
     return { ...sale, items };
 };
+
+/**
+ * Servicio Transaccional para Editar una Venta.
+ * Permite cambiar: ítems (cantidades/precios/productos), payment_method.
+ * El total_amount se recalcula automáticamente desde los ítems.
+ *
+ * Estrategia de stock (dentro de una sola transacción ACID):
+ *   1. Restaurar el stock de los ítems ORIGINALES (devolver lo que se había descontado).
+ *   2. Validar y descontar el stock de los NUEVOS ítems (con el stock ya restaurado).
+ *   3. Reemplazar los SaleDetail y actualizar la venta.
+ */
+export const updateSaleProcess = async (saleId, ownerId, { items, payment_method }) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        // 1. Verificar que la venta existe y pertenece al negocio
+        const sale = await Sale.findOne({ _id: saleId, customer_id: ownerId }).session(session);
+        if (!sale) throw new Error('Venta no encontrada o no pertenece a tu negocio.');
+        if (sale.status === 'cancelled') throw new Error('No se puede editar una venta anulada.');
+
+        // ── BLOQUE DE ÍTEMS (solo si se envían en el payload) ──
+        if (items && items.length > 0) {
+            // 2. Leer los detalles originales para revertir su stock
+            const originalDetails = await SaleDetail.find({ sale_id: saleId }).session(session);
+
+            // 3. Restaurar stock original (devolver a inventario lo que se vendió antes)
+            for (const detail of originalDetails) {
+                await Product.findByIdAndUpdate(
+                    detail.product_id,
+                    { $inc: { stock: detail.quantity } },
+                    { session }
+                );
+            }
+
+            // 4. Validar y descontar stock de los NUEVOS ítems
+            //    Una sola query trae todos los productos necesarios (evita N+1)
+            const newProductIds = items.map(i => i.product_id);
+            const products = await Product.find({ _id: { $in: newProductIds }, user: ownerId }).session(session);
+            const productsMap = new Map(products.map(p => [p._id.toString(), p]));
+
+            let newTotal = 0;
+            for (const item of items) {
+                const product = productsMap.get(item.product_id);
+                if (!product) throw new Error(`Producto con ID ${item.product_id} no encontrado.`);
+                // El stock actual ya incluye lo que devolvimos en el paso anterior
+                if (product.stock < item.quantity) {
+                    throw new Error(`Stock insuficiente para "${product.name}". Disponible: ${product.stock}, solicitado: ${item.quantity}`);
+                }
+                newTotal += item.quantity * item.unit_price;
+
+                await Product.findByIdAndUpdate(
+                    item.product_id,
+                    { $inc: { stock: -item.quantity } },
+                    { session }
+                );
+            }
+
+            // 5. Reemplazar los SaleDetail: eliminar los viejos y crear los nuevos
+            await SaleDetail.deleteMany({ sale_id: saleId }, { session });
+            for (const item of items) {
+                const detail = new SaleDetail({
+                    sale_id: saleId,
+                    product_id: item.product_id,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price
+                });
+                await detail.save({ session });
+            }
+
+            // El total se calcula siempre desde los ítems (fuente de verdad)
+            sale.total_amount = newTotal;
+        }
+
+        // ── CAMPOS SIMPLES (no afectan stock) ──
+        if (payment_method !== undefined) sale.payment_method = payment_method;
+
+        await sale.save({ session });
+
+        await session.commitTransaction();
+        session.endSession();
+
+        return sale;
+    } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
+        throw error;
+    }
+};
+
+/**
+ * Servicio Transaccional para Anular Ventas
+ */
+export const cancelSaleProcess = async (saleId, ownerId) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        // 1. Verificar la venta
+        const sale = await Sale.findOne({ _id: saleId, customer_id: ownerId }).session(session);
+        if (!sale) {
+            throw new Error('Venta no encontrada o no pertenece a tu negocio.');
+        }
+
+        if (sale.status === 'cancelled') {
+            throw new Error('La venta ya ha sido anulada anteriormente.');
+        }
+
+        // 2. Buscar los detalles
+        const details = await SaleDetail.find({ sale_id: saleId }).session(session);
+
+        // 3. Restaurar stock
+        for (const detail of details) {
+            await Product.findByIdAndUpdate(
+                detail.product_id,
+                { $inc: { stock: detail.quantity } },
+                { session }
+            );
+        }
+
+        // 4. Actualizar estado y establecer total en 0 para evitar sumar en reportes
+        sale.status = 'cancelled';
+        sale.total_amount = 0;
+        await sale.save({ session });
+
+        await session.commitTransaction();
+        session.endSession();
+
+        return sale;
+    } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
+        throw error;
+    }
+};

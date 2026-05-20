@@ -22,7 +22,7 @@ const saleSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'completed'],
+    enum: ['pending', 'completed', 'cancelled'],
     default: 'completed'
   }
 }, { timestamps: true });

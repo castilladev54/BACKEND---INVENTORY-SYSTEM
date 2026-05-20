@@ -22,3 +22,17 @@ export const saleIdSchema = z.object({
     id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Sale ID format")
   })
 });
+
+export const updateSaleSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Sale ID format")
+  }),
+  body: z.object({
+    total_amount: z.number().min(0, "Total amount must be a positive number").optional(),
+    payment_method: z.enum(
+      ['Efectivo', 'Divisas', 'Tarjeta', 'Pago Movil', 'Transferencia', 'Zelle'],
+      { errorMap: () => ({ message: "Método de pago no válido." }) }
+    ).optional(),
+    items: z.array(saleItemSchema).min(1, "At least one product item is required").optional()
+  })
+});

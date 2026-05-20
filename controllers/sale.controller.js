@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { invalidateCache, getOrSetCache, getCacheVersion, bumpCacheVersion, buildPaginatedKey } from '../lib/redis.js';
 import { Sale } from '../models/Sale.js';
 import { SaleDetail } from '../models/SaleDetail.js';
-import { createSaleProcess, fetchSaleById } from '../services/sale.service.js';
+import { createSaleProcess, fetchSaleById, cancelSaleProcess, updateSaleProcess } from '../services/sale.service.js';
 
 // Venezuela = UTC-4. El backend corre en UTC (Vercel).
 // Sin esta corrección, setHours(0,0,0,0) pondría la medianoche en UTC,
@@ -229,5 +229,70 @@ export const getSaleById = async (req, res) => {
     res.status(200).json({ success: true, sale: data, fromCache });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const cancelSale = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Restricción estricta: Los empleados no pueden anular ventas
+    if (req.userRole === 'employee') {
+      return res.status(403).json({ success: false, message: 'Los empleados no tienen permisos para anular ventas.' });
+    }
+
+    const ownerId = req.userId;
+
+    const cancelledSale = await cancelSaleProcess(id, ownerId);
+
+    // Invalidar caché (ventas, productos y la venta específica)
+    await Promise.all([
+      bumpCacheVersion('sales', ownerId),
+      bumpCacheVersion('products', ownerId),
+      invalidateCache(`sale:${id}:${req.realUserId}`)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Venta anulada exitosamente y stock restaurado',
+      sale: cancelledSale
+    });
+  } catch (error) {
+    res.status(error.message.includes('encontrada') ? 404 : 400).json({ success: false, message: error.message });
+  }
+};
+
+export const updateSale = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { items, payment_method } = req.body;
+
+    // Solo dueños pueden editar
+    if (req.userRole === 'employee') {
+      return res.status(403).json({ success: false, message: 'Los empleados no tienen permisos para editar ventas.' });
+    }
+
+    const ownerId = req.userId;
+
+    // El servicio transaccional maneja stock, SaleDetails y campos simples en una sola sesión ACID
+    const updatedSale = await updateSaleProcess(id, ownerId, { items, payment_method });
+
+    // Invalidar caché de ventas, productos (si hubo cambios de stock) y la venta individual
+    await Promise.all([
+      bumpCacheVersion('sales', ownerId),
+      bumpCacheVersion('products', ownerId),
+      invalidateCache(`sale:${id}:${req.realUserId}`)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Venta actualizada exitosamente',
+      sale: updatedSale
+    });
+  } catch (error) {
+    let status = 500;
+    if (error.message.includes('encontrada')) status = 404;
+    else if (error.message.includes('insuficiente') || error.message.includes('anulada')) status = 400;
+    res.status(status).json({ success: false, message: error.message });
   }
 };

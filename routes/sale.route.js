@@ -2,10 +2,12 @@ import express from 'express';
 import {
     createSale,
     getSales,
-    getSaleById
+    getSaleById,
+    cancelSale,
+    updateSale
 } from '../controllers/sale.controller.js';
 import { validate } from '../middleware/validate.js';
-import { createSaleSchema, saleIdSchema } from '../validations/sale.validation.js';
+import { createSaleSchema, saleIdSchema, updateSaleSchema } from '../validations/sale.validation.js';
 
 const router = express.Router();
 
@@ -13,5 +15,7 @@ const router = express.Router();
 router.post('/', validate(createSaleSchema), createSale);
 router.get('/', getSales);
 router.get('/:id', validate(saleIdSchema), getSaleById);
+router.patch('/:id', validate(updateSaleSchema), updateSale);
+router.put('/:id/cancel', validate(saleIdSchema), cancelSale);
 
 export default router;
